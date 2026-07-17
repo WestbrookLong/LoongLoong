@@ -318,7 +318,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .inspector-page { display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
 .database-path { display: inline-flex; max-width: 50vw; align-items: center; gap: 5px; overflow: hidden; color: var(--muted); font-family: Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .inspector-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 54px; padding: 8px 18px; border-bottom: 1px solid var(--line); background: #fafaf8; }
-.tabs { display: flex; align-items: center; gap: 4px; }
+.tabs { display: flex; min-width: 0; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
+.tabs button { flex: 0 0 auto; }
 .tabs button { min-height: 32px; padding: 0 12px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; }
 .tabs button.active { color: var(--ink); background: #e8e8e3; font-weight: 650; }
 .search-field { display: flex; width: min(260px, 30vw); height: 34px; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }

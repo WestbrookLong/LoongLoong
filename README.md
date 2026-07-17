@@ -2,7 +2,9 @@
 
 Local-first AI pet desktop prototype with text/voice chat, inspectable SQLite memory, event capture, retrieval, and daily consolidation.
 
-## Memory v0.2
+## Memory v0.3
+
+Detailed architecture, schema, algorithms, and implementation notes: [Memory_Design.md](./Memory_Design.md).
 
 Pet keeps raw messages immutable and builds derived memory in separate layers:
 
@@ -13,6 +15,10 @@ Pet keeps raw messages immutable and builds derived memory in separate layers:
 - every context compaction also extracts durable events and claim candidates
 - daily consolidation flushes pending extraction, writes a narrative summary, and proposes claim relations
 - LLM output cannot mutate memory directly; evidence validation and the claim state reducer apply changes
+- long-running topics preserve current position, decisions, rationales, rejected ideas, and disagreements across sessions
+- open loops track unresolved questions, tasks, commitments, and explicit continuations with resolution evidence
+- a continuity router handles low-information prompts such as "continue" before ordinary claim/event retrieval
+- context snapshots reference canonical topic and open-loop versions instead of becoming their source of truth
 
 The development inspector exposes context snapshots, extraction runs, compaction runs, claims, evidence, and claim relations. Context and memory model settings are configurable independently from the chat model.
 

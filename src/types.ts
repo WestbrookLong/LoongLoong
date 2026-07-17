@@ -50,6 +50,9 @@ export interface Dashboard {
   contextSnapshots: number;
   memoryExtractions: number;
   contextCompactions: number;
+  topics: number;
+  openLoops: number;
+  continuityUpdates: number;
   databasePath: string;
 }
 

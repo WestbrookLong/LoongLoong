@@ -21,13 +21,18 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
   memory: [
     { id: "memories", label: "记忆" },
     { id: "events", label: "事件" },
+    { id: "topics", label: "主题" },
+    { id: "topic_items", label: "讨论演化" },
+    { id: "open_loops", label: "开放循环" },
     { id: "days", label: "每日摘要" },
     { id: "extractions", label: "智能提取" },
     { id: "claim_relations", label: "记忆关系" },
+    { id: "state_documents", label: "持续状态" },
   ],
   logs: [
     { id: "logs", label: "运行日志" },
     { id: "compactions", label: "压缩运行" },
+    { id: "continuity_runs", label: "连续性更新" },
   ],
 };
 
@@ -61,6 +66,7 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "canonical_text", label: "记忆" },
     { key: "scope_id", label: "作用域", width: "90px" },
     { key: "confidence", label: "置信度", width: "80px" },
+    { key: "epistemic_basis", label: "认识来源", width: "130px" },
     { key: "evidence_count", label: "证据", width: "70px" },
   ],
   events: [
@@ -74,6 +80,29 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "state", label: "状态", width: "90px" },
     { key: "summary", label: "摘要" },
     { key: "version", label: "版本", width: "70px" },
+  ],
+  topics: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "title", label: "主题", width: "180px" },
+    { key: "current_position", label: "当前位置" },
+    { key: "item_count", label: "演化", width: "70px" },
+    { key: "open_loop_count", label: "未完成", width: "70px" },
+    { key: "last_active_at", label: "最近活跃", width: "150px" },
+  ],
+  topic_items: [
+    { key: "item_type", label: "类型", width: "140px" },
+    { key: "content", label: "内容" },
+    { key: "status", label: "状态", width: "90px" },
+    { key: "epistemic_basis", label: "认识来源", width: "130px" },
+    { key: "topic_title", label: "主题", width: "160px" },
+  ],
+  open_loops: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "description", label: "未完成事项" },
+    { key: "loop_type", label: "类型", width: "100px" },
+    { key: "owner", label: "责任方", width: "90px" },
+    { key: "priority", label: "优先级", width: "75px" },
+    { key: "topic_title", label: "主题", width: "150px" },
   ],
   extractions: [
     { key: "trigger_type", label: "触发", width: "100px" },
@@ -100,6 +129,19 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "input_tokens", label: "输入 Tokens", width: "100px" },
     { key: "output_tokens", label: "输出 Tokens", width: "100px" },
     { key: "started_at", label: "时间", width: "150px" },
+  ],
+  continuity_runs: [
+    { key: "trigger_type", label: "触发", width: "150px" },
+    { key: "status", label: "状态", width: "90px" },
+    { key: "applied_ops_json", label: "应用操作" },
+    { key: "model_version", label: "模型", width: "130px" },
+    { key: "started_at", label: "时间", width: "150px" },
+  ],
+  state_documents: [
+    { key: "state_type", label: "状态对象", width: "140px" },
+    { key: "current_state_json", label: "当前状态" },
+    { key: "version", label: "版本", width: "70px" },
+    { key: "updated_at", label: "更新时间", width: "150px" },
   ],
 };
 

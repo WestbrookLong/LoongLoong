@@ -88,6 +88,7 @@ class PetDatabase {
         hermes_session_id TEXT,
         activity_id TEXT,
         salience REAL NOT NULL DEFAULT 0,
+        continuity_value REAL NOT NULL DEFAULT 0,
         confidence REAL NOT NULL DEFAULT 1,
         retention_class TEXT NOT NULL,
         sensitivity TEXT NOT NULL DEFAULT 'private',
@@ -115,6 +116,7 @@ class PetDatabase {
         importance REAL NOT NULL,
         stability REAL NOT NULL,
         promotion_score REAL NOT NULL DEFAULT 0,
+        epistemic_basis TEXT NOT NULL DEFAULT 'unknown_legacy',
         sensitivity TEXT NOT NULL,
         valid_from TEXT,
         valid_to TEXT,
@@ -179,6 +181,7 @@ class PetDatabase {
         source_end_rowid INTEGER NOT NULL,
         source_token_count INTEGER NOT NULL,
         summary_token_count INTEGER NOT NULL,
+        continuity_refs_json TEXT NOT NULL DEFAULT '{}',
         model_version TEXT NOT NULL,
         prompt_version TEXT NOT NULL,
         created_at TEXT NOT NULL,
@@ -245,6 +248,162 @@ class PetDatabase {
         FOREIGN KEY (target_claim_id) REFERENCES memory_claims(id)
       );
 
+      CREATE TABLE IF NOT EXISTS topic_threads (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        overview TEXT NOT NULL DEFAULT '',
+        current_position TEXT NOT NULL DEFAULT '',
+        continuity_value REAL NOT NULL DEFAULT 0,
+        current_revision_id TEXT,
+        created_at TEXT NOT NULL,
+        last_active_at TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1
+      );
+
+      CREATE TABLE IF NOT EXISTS topic_revisions (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL,
+        base_version INTEGER NOT NULL,
+        result_version INTEGER NOT NULL,
+        overview TEXT NOT NULL,
+        current_position TEXT NOT NULL,
+        operations_json TEXT NOT NULL DEFAULT '[]',
+        source_run_id TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (topic_id) REFERENCES topic_threads(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS topic_items (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL,
+        item_type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL,
+        epistemic_basis TEXT NOT NULL,
+        continuity_value REAL NOT NULL DEFAULT 0,
+        superseded_by TEXT,
+        source_run_id TEXT,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (topic_id) REFERENCES topic_threads(id),
+        FOREIGN KEY (superseded_by) REFERENCES topic_items(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS topic_item_evidence (
+        topic_item_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        relation TEXT NOT NULL DEFAULT 'supports',
+        weight REAL NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (topic_item_id, event_id, relation),
+        FOREIGN KEY (topic_item_id) REFERENCES topic_items(id),
+        FOREIGN KEY (event_id) REFERENCES events(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS topic_event_links (
+        topic_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        relation TEXT NOT NULL DEFAULT 'discusses',
+        weight REAL NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (topic_id, event_id, relation),
+        FOREIGN KEY (topic_id) REFERENCES topic_threads(id),
+        FOREIGN KEY (event_id) REFERENCES events(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS open_loops (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT,
+        loop_type TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        description TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        priority REAL NOT NULL DEFAULT 0.5,
+        continuity_value REAL NOT NULL DEFAULT 0.8,
+        resolution_summary TEXT,
+        resolution_event_id TEXT,
+        source_run_id TEXT,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        last_touched_at TEXT NOT NULL,
+        resolved_at TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (topic_id) REFERENCES topic_threads(id),
+        FOREIGN KEY (resolution_event_id) REFERENCES events(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS open_loop_evidence (
+        open_loop_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        weight REAL NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (open_loop_id, event_id, relation),
+        FOREIGN KEY (open_loop_id) REFERENCES open_loops(id),
+        FOREIGN KEY (event_id) REFERENCES events(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS continuity_state (
+        id TEXT PRIMARY KEY,
+        active_topic_id TEXT,
+        recent_topic_ids_json TEXT NOT NULL DEFAULT '[]',
+        last_topic_transition_at TEXT,
+        updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (active_topic_id) REFERENCES topic_threads(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS continuity_update_runs (
+        id TEXT PRIMARY KEY,
+        session_id TEXT,
+        trigger_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source_message_ids_json TEXT NOT NULL DEFAULT '[]',
+        source_event_ids_json TEXT NOT NULL DEFAULT '[]',
+        source_hash TEXT NOT NULL,
+        model_version TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        raw_output_json TEXT NOT NULL DEFAULT '{}',
+        applied_ops_json TEXT NOT NULL DEFAULT '[]',
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        error TEXT,
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS state_documents (
+        id TEXT PRIMARY KEY,
+        state_type TEXT NOT NULL UNIQUE,
+        current_state_json TEXT NOT NULL DEFAULT '{}',
+        current_revision_id TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS state_revisions (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL,
+        base_version INTEGER NOT NULL,
+        result_version INTEGER NOT NULL,
+        operations_json TEXT NOT NULL DEFAULT '[]',
+        resulting_state_json TEXT NOT NULL,
+        source_run_id TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (document_id) REFERENCES state_documents(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS state_revision_evidence (
+        revision_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        relation TEXT NOT NULL DEFAULT 'supports',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (revision_id, event_id, relation),
+        FOREIGN KEY (revision_id) REFERENCES state_revisions(id),
+        FOREIGN KEY (event_id) REFERENCES events(id)
+      );
+
       CREATE TABLE IF NOT EXISTS logs (
         id TEXT PRIMARY KEY,
         level TEXT NOT NULL,
@@ -264,12 +423,30 @@ class PetDatabase {
       CREATE INDEX IF NOT EXISTS idx_extraction_runs_session ON memory_extraction_runs(session_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_event_sources_message ON event_sources(message_id);
       CREATE INDEX IF NOT EXISTS idx_claim_relations_target ON claim_relations(target_claim_id);
+      CREATE INDEX IF NOT EXISTS idx_topics_status_active ON topic_threads(status, last_active_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_topic_items_topic ON topic_items(topic_id, item_type, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_topic_event_links_event ON topic_event_links(event_id);
+      CREATE INDEX IF NOT EXISTS idx_open_loops_topic_status ON open_loops(topic_id, status, priority DESC);
+      CREATE INDEX IF NOT EXISTS idx_continuity_runs_time ON continuity_update_runs(started_at DESC);
     `);
 
-    const messageColumns = this.all("PRAGMA table_info(messages)").map((column) => column.name);
-    if (!messageColumns.includes("memory_processed_at")) {
-      this.db.run("ALTER TABLE messages ADD COLUMN memory_processed_at TEXT");
-    }
+    const ensureColumn = (table, column, definition) => {
+      const columns = this.all(`PRAGMA table_info(${table})`).map((item) => item.name);
+      if (!columns.includes(column)) this.db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    };
+    ensureColumn("messages", "memory_processed_at", "TEXT");
+    ensureColumn("events", "continuity_value", "REAL NOT NULL DEFAULT 0");
+    ensureColumn("memory_claims", "epistemic_basis", "TEXT NOT NULL DEFAULT 'unknown_legacy'");
+    ensureColumn("context_snapshots", "continuity_refs_json", "TEXT NOT NULL DEFAULT '{}'");
+    ensureColumn("continuity_update_runs", "source_message_ids_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.db.run(
+      `UPDATE memory_claims SET epistemic_basis = 'stated_by_user'
+       WHERE epistemic_basis = 'unknown_legacy' AND EXISTS (
+         SELECT 1 FROM memory_evidence me
+         JOIN events e ON e.id = me.event_id
+         WHERE me.claim_id = memory_claims.id AND e.actor = 'user'
+       )`,
+    );
   }
 
   recoverInterruptedRuns() {
@@ -285,6 +462,10 @@ class PetDatabase {
     );
     this.db.run(
       "UPDATE consolidation_runs SET status = 'interrupted', error = $error, completed_at = $now WHERE status = 'running'",
+      { $error: error, $now: now },
+    );
+    this.db.run(
+      "UPDATE continuity_update_runs SET status = 'interrupted', error = $error, completed_at = $now WHERE status = 'running'",
       { $error: error, $now: now },
     );
   }
@@ -314,6 +495,41 @@ class PetDatabase {
       this.db.run(
         "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ($key, $value, $updatedAt)",
         { $key: key, $value: value, $updatedAt: stamp },
+      );
+    }
+    this.db.run(
+      `INSERT OR IGNORE INTO continuity_state
+       (id, recent_topic_ids_json, updated_at) VALUES ('primary', '[]', $updatedAt)`,
+      { $updatedAt: stamp },
+    );
+    const stateDefaults = {
+      relationship: {
+        interaction_style: [],
+        trust_boundaries: [],
+        shared_history_summary: "",
+        important_shared_moments: [],
+        recurring_tensions: [],
+        current_relationship_model: "",
+      },
+      self_model: {
+        successful_patterns: [],
+        known_failure_modes: [],
+        user_corrections_to_agent: [],
+        current_behavior_adjustments: [],
+        unfulfilled_commitment_ids: [],
+      },
+    };
+    for (const [stateType, stateValue] of Object.entries(stateDefaults)) {
+      this.db.run(
+        `INSERT OR IGNORE INTO state_documents
+         (id, state_type, current_state_json, updated_at)
+         VALUES ($id, $stateType, $state, $updatedAt)`,
+        {
+          $id: `state-${stateType}`,
+          $stateType: stateType,
+          $state: JSON.stringify(stateValue),
+          $updatedAt: stamp,
+        },
       );
     }
     const session = this.get("SELECT id FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1");

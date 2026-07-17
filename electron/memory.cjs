@@ -92,11 +92,23 @@ function captureUserTurn(db, { messageId, sessionId, text, modality = "text", us
   const eventId = crypto.randomUUID();
   const dedupeKey = hash(`${messageId}:${classification.eventType}:${text.trim()}`);
   const salience = clamp(classification.importance * 0.75 + classification.explicitness * 0.25);
+  const continuityValue = classification.eventType === "correction"
+    ? 0.9
+    : classification.claimType === "explicit_memory"
+      ? 0.9
+      : classification.claimType === "goal"
+        ? 0.8
+        : classification.claimType === "decision"
+          ? 0.75
+          : activityId
+            ? 0.45
+            : 0.25;
   const payload = {
     modality,
     explicitness: classification.explicitness,
     importance: classification.importance,
     stability: classification.stability,
+    continuity_value: continuityValue,
     topic: inferTopic(text),
   };
 
@@ -105,10 +117,10 @@ function captureUserTurn(db, { messageId, sessionId, text, modality = "text", us
       `INSERT OR IGNORE INTO events
        (id, journal_day_id, sequence_no, event_type, actor, occurred_at, recorded_at,
         content, payload_json, source_kind, source_id, hermes_session_id, activity_id,
-        salience, confidence, retention_class, sensitivity, dedupe_key, extractor_version)
+        salience, continuity_value, confidence, retention_class, sensitivity, dedupe_key, extractor_version)
        VALUES ($id, $dayId, $sequence, $eventType, 'user', $occurredAt, $recordedAt,
         $content, $payload, 'message', $sourceId, $sessionId, $activityId,
-        $salience, 0.92, $retention, 'private', $dedupeKey, $extractorVersion)`,
+        $salience, $continuityValue, 0.92, $retention, 'private', $dedupeKey, $extractorVersion)`,
       {
         $id: eventId,
         $dayId: day.id,
@@ -122,6 +134,7 @@ function captureUserTurn(db, { messageId, sessionId, text, modality = "text", us
         $sessionId: sessionId,
         $activityId: activityId,
         $salience: salience,
+        $continuityValue: continuityValue,
         $retention: classification.claimType ? "durable" : activityId ? "activity" : "session",
         $dedupeKey: dedupeKey,
         $extractorVersion: EXTRACTOR_VERSION,
@@ -185,11 +198,11 @@ function upsertCandidateClaim(db, { eventId, text, activityId, classification, s
     `INSERT INTO memory_claims
      (id, namespace, claim_type, subject, predicate, object_json, canonical_text,
       scope_type, scope_id, claim_key, value_hash, cardinality, status, confidence,
-      importance, stability, promotion_score, sensitivity, valid_from,
+      importance, stability, promotion_score, epistemic_basis, sensitivity, valid_from,
       last_confirmed_at, created_at, updated_at)
      VALUES ($id, 'user', $claimType, 'user', $predicate, $objectJson, $canonicalText,
       $scopeType, $scopeId, $claimKey, $valueHash, 'single', $status, 0.78,
-      $importance, $stability, $promotionScore, 'private', $validFrom,
+      $importance, $stability, $promotionScore, 'stated_by_user', 'private', $validFrom,
       $lastConfirmedAt, $createdAt, $updatedAt)`,
     {
       $id: claimId,

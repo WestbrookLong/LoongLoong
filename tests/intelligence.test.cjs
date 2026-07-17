@@ -159,6 +159,7 @@ test("context compaction creates a snapshot and preserves a raw tail", async (t)
   });
   assert.equal(result.compacted, true);
   assert.ok(result.snapshot.id);
+  assert.equal(typeof JSON.parse(result.snapshot.continuity_refs_json).continuity_state_version, "number");
   assert.ok(result.messages.length >= 3);
   assert.ok(result.messages.length < 13);
   assert.equal(db.get("SELECT status FROM context_compaction_runs WHERE id = $id", { $id: result.runId }).status, "complete");
