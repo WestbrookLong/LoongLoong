@@ -16,16 +16,35 @@ function formatTime(value: string) {
 export function ChatPanel({ messages, busy, onSend, onMic }: Props) {
   const [text, setText] = useState("");
   const [deep, setDeep] = useState(false);
-  const endRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const initializedRef = useRef(false);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, busy]);
+    const list = listRef.current;
+    if (!list || (initializedRef.current && !stickToBottomRef.current)) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      list.scrollTo({
+        top: list.scrollHeight,
+        behavior: initializedRef.current ? "smooth" : "auto",
+      });
+      initializedRef.current = true;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages.length, busy]);
+
+  const updateScrollPosition = () => {
+    const list = listRef.current;
+    if (!list) return;
+    stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 72;
+  };
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
     const value = text.trim();
     if (!value || busy) return;
+    stickToBottomRef.current = true;
     setText("");
     await onSend(value, deep);
     setDeep(false);
@@ -55,7 +74,7 @@ export function ChatPanel({ messages, busy, onSend, onMic }: Props) {
         </button>
       </header>
 
-      <div className="message-list">
+      <div ref={listRef} className="message-list" onScroll={updateScrollPosition}>
         {messages.map((message) => (
           <article key={message.id} className={`message ${message.role}`}>
             <div className="message-meta">
@@ -71,7 +90,6 @@ export function ChatPanel({ messages, busy, onSend, onMic }: Props) {
             <span /><span /><span />
           </div>
         )}
-        <div ref={endRef} />
       </div>
 
       <form className="composer" onSubmit={submit}>
@@ -94,4 +112,3 @@ export function ChatPanel({ messages, busy, onSend, onMic }: Props) {
     </section>
   );
 }
-

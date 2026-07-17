@@ -26,6 +26,13 @@ export interface Settings {
   transcriptionBaseUrl: string;
   chatModel: string;
   transcriptionModel: string;
+  memoryModel: string;
+  compressionModel: string;
+  contextWindowTokens: string;
+  reservedOutputTokens: string;
+  contextSoftThreshold: string;
+  contextTargetRatio: string;
+  memoryBatchSize: string;
   temperature: string;
   autoSpeak: boolean;
   systemPrompt: string;
@@ -40,6 +47,9 @@ export interface Dashboard {
   candidates: number;
   logs: number;
   retrievals: number;
+  contextSnapshots: number;
+  memoryExtractions: number;
+  contextCompactions: number;
   databasePath: string;
 }
 

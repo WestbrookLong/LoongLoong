@@ -16,13 +16,19 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
     { id: "messages", label: "消息" },
     { id: "sessions", label: "会话" },
     { id: "retrievals", label: "检索" },
+    { id: "snapshots", label: "上下文快照" },
   ],
   memory: [
     { id: "memories", label: "记忆" },
     { id: "events", label: "事件" },
     { id: "days", label: "每日摘要" },
+    { id: "extractions", label: "智能提取" },
+    { id: "claim_relations", label: "记忆关系" },
   ],
-  logs: [{ id: "logs", label: "运行日志" }],
+  logs: [
+    { id: "logs", label: "运行日志" },
+    { id: "compactions", label: "压缩运行" },
+  ],
 };
 
 const columns: Record<string, Array<{ key: string; label: string; width?: string }>> = {
@@ -44,6 +50,12 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "token_estimate", label: "Tokens", width: "80px" },
     { key: "created_at", label: "时间", width: "150px" },
   ],
+  snapshots: [
+    { key: "summary_text", label: "会话摘要" },
+    { key: "source_token_count", label: "原 Tokens", width: "90px" },
+    { key: "summary_token_count", label: "摘要 Tokens", width: "100px" },
+    { key: "created_at", label: "时间", width: "150px" },
+  ],
   memories: [
     { key: "status", label: "状态", width: "90px" },
     { key: "canonical_text", label: "记忆" },
@@ -63,11 +75,31 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "summary", label: "摘要" },
     { key: "version", label: "版本", width: "70px" },
   ],
+  extractions: [
+    { key: "trigger_type", label: "触发", width: "100px" },
+    { key: "status", label: "状态", width: "90px" },
+    { key: "event_count", label: "事件", width: "70px" },
+    { key: "claim_count", label: "Claims", width: "70px" },
+    { key: "started_at", label: "时间", width: "150px" },
+  ],
+  claim_relations: [
+    { key: "relation", label: "关系", width: "110px" },
+    { key: "source_claim_id", label: "新 Claim" },
+    { key: "target_claim_id", label: "关联 Claim" },
+    { key: "confidence", label: "置信度", width: "80px" },
+  ],
   logs: [
     { key: "level", label: "级别", width: "80px" },
     { key: "category", label: "模块", width: "100px" },
     { key: "message", label: "消息" },
     { key: "created_at", label: "时间", width: "150px" },
+  ],
+  compactions: [
+    { key: "trigger_type", label: "触发", width: "110px" },
+    { key: "status", label: "状态", width: "90px" },
+    { key: "input_tokens", label: "输入 Tokens", width: "100px" },
+    { key: "output_tokens", label: "输出 Tokens", width: "100px" },
+    { key: "started_at", label: "时间", width: "150px" },
   ],
 };
 
@@ -198,4 +230,3 @@ export function DataInspector({ kind, dashboard, onDashboard, notify }: Props) {
     </main>
   );
 }
-

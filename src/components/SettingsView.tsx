@@ -109,6 +109,44 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
           </div>
         </section>
 
+        <section>
+          <h2>智能记忆</h2>
+          <div className="form-grid">
+            <label>
+              <span>记忆提取模型</span>
+              <input value={form.memoryModel} onChange={(event) => update("memoryModel", event.target.value)} />
+            </label>
+            <label>
+              <span>上下文压缩模型</span>
+              <input value={form.compressionModel} onChange={(event) => update("compressionModel", event.target.value)} />
+            </label>
+          </div>
+          <div className="form-grid compact">
+            <label>
+              <span>上下文窗口 Tokens</span>
+              <input type="number" min="4096" step="1024" value={form.contextWindowTokens} onChange={(event) => update("contextWindowTokens", event.target.value)} />
+            </label>
+            <label>
+              <span>预留输出 Tokens</span>
+              <input type="number" min="512" step="512" value={form.reservedOutputTokens} onChange={(event) => update("reservedOutputTokens", event.target.value)} />
+            </label>
+          </div>
+          <div className="form-grid">
+            <label>
+              <span>压缩触发比例</span>
+              <input type="number" min="0.5" max="0.9" step="0.05" value={form.contextSoftThreshold} onChange={(event) => update("contextSoftThreshold", event.target.value)} />
+            </label>
+            <label>
+              <span>压缩目标比例</span>
+              <input type="number" min="0.25" max="0.65" step="0.05" value={form.contextTargetRatio} onChange={(event) => update("contextTargetRatio", event.target.value)} />
+            </label>
+          </div>
+          <label>
+            <span>后台提取批大小</span>
+            <input type="number" min="2" max="24" step="1" value={form.memoryBatchSize} onChange={(event) => update("memoryBatchSize", event.target.value)} />
+          </label>
+        </section>
+
         <div className="settings-actions">
           <button type="button" className="secondary-button" onClick={test} disabled={busy}>
             {tested ? <Check size={17} /> : <PlugZap size={17} />}

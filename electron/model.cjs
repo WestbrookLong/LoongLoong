@@ -13,6 +13,57 @@ function requestHeaders(apiKey) {
   return headers;
 }
 
+function parseJsonResponse(content) {
+  const text = String(content || "").trim();
+  const unfenced = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    return JSON.parse(unfenced);
+  } catch {
+    const start = unfenced.indexOf("{");
+    const end = unfenced.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(unfenced.slice(start, end + 1));
+    throw new Error("智能记忆模型没有返回有效的 JSON。");
+  }
+}
+
+async function structuredCompletion({ settings, apiKey, model, messages, temperature = 0.1 }) {
+  const baseUrl = normalizeBaseUrl(settings.chatBaseUrl || settings.baseUrl);
+  const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl);
+  if (!apiKey && !isLocal) throw new Error("请先配置模型 API 密钥以启用智能记忆。");
+
+  const payload = {
+    model: model || settings.memoryModel || settings.chatModel,
+    messages,
+    temperature,
+    response_format: { type: "json_object" },
+  };
+  let response = await fetch(endpoint(baseUrl, "/chat/completions"), {
+    method: "POST",
+    headers: requestHeaders(apiKey),
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok && response.status === 400) {
+    delete payload.response_format;
+    response = await fetch(endpoint(baseUrl, "/chat/completions"), {
+      method: "POST",
+      headers: requestHeaders(apiKey),
+      body: JSON.stringify(payload),
+    });
+  }
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`智能记忆请求失败 (${response.status}): ${details.slice(0, 500)}`);
+  }
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("智能记忆模型返回了空响应。");
+  return {
+    data: parseJsonResponse(content),
+    raw: String(content),
+    usage: data.usage || {},
+  };
+}
+
 async function chatCompletion({ settings, apiKey, messages }) {
   const baseUrl = normalizeBaseUrl(settings.chatBaseUrl || settings.baseUrl);
   const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl);
@@ -107,4 +158,4 @@ async function testConnection({ settings, apiKey }) {
   return { ok: true };
 }
 
-module.exports = { chatCompletion, endpoint, testConnection, transcribeAudio };
+module.exports = { chatCompletion, endpoint, parseJsonResponse, structuredCompletion, testConnection, transcribeAudio };

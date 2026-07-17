@@ -25,6 +25,7 @@ class PetDatabase {
     this.db = bytes ? new SQL.Database(bytes) : new SQL.Database();
     this.db.run("PRAGMA foreign_keys = ON");
     this.migrate();
+    this.recoverInterruptedRuns();
     this.seed();
     this.persist();
     return this;
@@ -166,6 +167,84 @@ class PetDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS context_snapshots (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        parent_snapshot_id TEXT,
+        summary_text TEXT NOT NULL,
+        state_json TEXT NOT NULL,
+        source_message_ids_json TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        source_start_rowid INTEGER NOT NULL,
+        source_end_rowid INTEGER NOT NULL,
+        source_token_count INTEGER NOT NULL,
+        summary_token_count INTEGER NOT NULL,
+        model_version TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id),
+        FOREIGN KEY (parent_snapshot_id) REFERENCES context_snapshots(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS context_compaction_runs (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        snapshot_id TEXT,
+        trigger_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        source_message_count INTEGER NOT NULL DEFAULT 0,
+        model_version TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        error TEXT,
+        FOREIGN KEY (session_id) REFERENCES sessions(id),
+        FOREIGN KEY (snapshot_id) REFERENCES context_snapshots(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_extraction_runs (
+        id TEXT PRIMARY KEY,
+        session_id TEXT,
+        trigger_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source_message_ids_json TEXT NOT NULL DEFAULT '[]',
+        source_hash TEXT NOT NULL,
+        event_count INTEGER NOT NULL DEFAULT 0,
+        claim_count INTEGER NOT NULL DEFAULT 0,
+        model_version TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        raw_output_json TEXT NOT NULL DEFAULT '{}',
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        error TEXT,
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS event_sources (
+        event_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        relation TEXT NOT NULL DEFAULT 'derived_from',
+        evidence_quote TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (event_id, message_id),
+        FOREIGN KEY (event_id) REFERENCES events(id),
+        FOREIGN KEY (message_id) REFERENCES messages(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS claim_relations (
+        source_claim_id TEXT NOT NULL,
+        target_claim_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        source_run_id TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (source_claim_id, target_claim_id, relation),
+        FOREIGN KEY (source_claim_id) REFERENCES memory_claims(id),
+        FOREIGN KEY (target_claim_id) REFERENCES memory_claims(id)
+      );
+
       CREATE TABLE IF NOT EXISTS logs (
         id TEXT PRIMARY KEY,
         level TEXT NOT NULL,
@@ -181,7 +260,33 @@ class PetDatabase {
       CREATE INDEX IF NOT EXISTS idx_claims_status_scope ON memory_claims(status, scope_type, scope_id);
       CREATE INDEX IF NOT EXISTS idx_claims_key ON memory_claims(claim_key);
       CREATE INDEX IF NOT EXISTS idx_logs_time ON logs(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_context_snapshots_session ON context_snapshots(session_id, source_end_rowid DESC);
+      CREATE INDEX IF NOT EXISTS idx_extraction_runs_session ON memory_extraction_runs(session_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_event_sources_message ON event_sources(message_id);
+      CREATE INDEX IF NOT EXISTS idx_claim_relations_target ON claim_relations(target_claim_id);
     `);
+
+    const messageColumns = this.all("PRAGMA table_info(messages)").map((column) => column.name);
+    if (!messageColumns.includes("memory_processed_at")) {
+      this.db.run("ALTER TABLE messages ADD COLUMN memory_processed_at TEXT");
+    }
+  }
+
+  recoverInterruptedRuns() {
+    const now = isoNow();
+    const error = "Pet 上次退出时任务仍在运行，已在本次启动时标记为中断。";
+    this.db.run(
+      "UPDATE memory_extraction_runs SET status = 'interrupted', error = $error, completed_at = $now WHERE status = 'running'",
+      { $error: error, $now: now },
+    );
+    this.db.run(
+      "UPDATE context_compaction_runs SET status = 'interrupted', error = $error, completed_at = $now WHERE status = 'running'",
+      { $error: error, $now: now },
+    );
+    this.db.run(
+      "UPDATE consolidation_runs SET status = 'interrupted', error = $error, completed_at = $now WHERE status = 'running'",
+      { $error: error, $now: now },
+    );
   }
 
   seed() {
@@ -193,6 +298,13 @@ class PetDatabase {
       transcriptionBaseUrl: defaultBaseUrl,
       chatModel: "qwen3.7-max",
       transcriptionModel: "qwen3-asr-flash",
+      memoryModel: "qwen3.7-max",
+      compressionModel: "qwen3.7-max",
+      contextWindowTokens: "32768",
+      reservedOutputTokens: "4096",
+      contextSoftThreshold: "0.75",
+      contextTargetRatio: "0.45",
+      memoryBatchSize: "6",
       temperature: "0.7",
       autoSpeak: "true",
       systemPrompt: "你是一个长期陪伴用户的 AI 宠物。你温暖、敏锐、诚实，会自然地使用记忆，但不会假装记得不存在的事情。",

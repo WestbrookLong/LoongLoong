@@ -65,7 +65,7 @@ function classify(text) {
 function promotionScore({ explicitness, importance, stability, relationship = 0.35, salience = 0.4 }) {
   const score = clamp(
     0.3 * explicitness +
-      0.2 * 0.35 +
+      0.2 * stability +
       0.2 * importance +
       0.15 * relationship +
       0.15 * salience,
@@ -73,7 +73,7 @@ function promotionScore({ explicitness, importance, stability, relationship = 0.
   return explicitness >= 0.99 ? Math.max(0.82, score) : score;
 }
 
-function captureUserTurn(db, { messageId, sessionId, text, modality = "text" }) {
+function captureUserTurn(db, { messageId, sessionId, text, modality = "text", useDeterministicClaims = true }) {
   if (!text || text.trim().length < 3) return [];
   if (containsForbiddenSecret(text)) {
     db.log("warn", "memory", "检测到敏感内容，本轮未写入事件或记忆。", { messageId });
@@ -128,7 +128,7 @@ function captureUserTurn(db, { messageId, sessionId, text, modality = "text" }) 
       },
     );
 
-    if (classification.claimType) {
+    if (classification.claimType && useDeterministicClaims) {
       upsertCandidateClaim(db, {
         eventId,
         text: text.trim(),

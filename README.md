@@ -2,6 +2,20 @@
 
 Local-first AI pet desktop prototype with text/voice chat, inspectable SQLite memory, event capture, retrieval, and daily consolidation.
 
+## Memory v0.2
+
+Pet keeps raw messages immutable and builds derived memory in separate layers:
+
+- deterministic event capture is the offline fallback and evidence floor
+- explicit memory requests are extracted by the memory LLM immediately
+- ordinary turns are extracted in serialized background batches
+- token pressure creates an iterative session context snapshot before the model call
+- every context compaction also extracts durable events and claim candidates
+- daily consolidation flushes pending extraction, writes a narrative summary, and proposes claim relations
+- LLM output cannot mutate memory directly; evidence validation and the claim state reducer apply changes
+
+The development inspector exposes context snapshots, extraction runs, compaction runs, claims, evidence, and claim relations. Context and memory model settings are configurable independently from the chat model.
+
 ## Run
 
 ```powershell
@@ -19,4 +33,3 @@ Development data is stored in `.pet-data/pet.db`. The directory is ignored by Gi
 npm test
 npm run build
 ```
-
