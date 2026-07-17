@@ -89,6 +89,8 @@ class PetDatabase {
         activity_id TEXT,
         salience REAL NOT NULL DEFAULT 0,
         continuity_value REAL NOT NULL DEFAULT 0,
+        continuity_score_version TEXT NOT NULL DEFAULT 'unknown-legacy',
+        continuity_components_json TEXT NOT NULL DEFAULT '{}',
         confidence REAL NOT NULL DEFAULT 1,
         retention_class TEXT NOT NULL,
         sensitivity TEXT NOT NULL DEFAULT 'private',
@@ -166,6 +168,12 @@ class PetDatabase {
         selected_event_ids TEXT NOT NULL DEFAULT '[]',
         token_estimate INTEGER NOT NULL,
         score_json TEXT NOT NULL DEFAULT '{}',
+        score_version TEXT NOT NULL DEFAULT 'memory-retrieval-v1',
+        route_json TEXT NOT NULL DEFAULT '{}',
+        selected_topic_ids_json TEXT NOT NULL DEFAULT '[]',
+        selected_topic_item_ids_json TEXT NOT NULL DEFAULT '[]',
+        selected_open_loop_ids_json TEXT NOT NULL DEFAULT '[]',
+        outcome_json TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL
       );
 
@@ -255,10 +263,16 @@ class PetDatabase {
         overview TEXT NOT NULL DEFAULT '',
         current_position TEXT NOT NULL DEFAULT '',
         continuity_value REAL NOT NULL DEFAULT 0,
+        continuity_score_version TEXT NOT NULL DEFAULT 'unknown-legacy',
+        continuity_components_json TEXT NOT NULL DEFAULT '{}',
+        canonical_topic_id TEXT,
+        active_item_ids_json TEXT NOT NULL DEFAULT '[]',
+        tentative_item_ids_json TEXT NOT NULL DEFAULT '[]',
         current_revision_id TEXT,
         created_at TEXT NOT NULL,
         last_active_at TEXT NOT NULL,
-        version INTEGER NOT NULL DEFAULT 1
+        version INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (canonical_topic_id) REFERENCES topic_threads(id)
       );
 
       CREATE TABLE IF NOT EXISTS topic_revisions (
@@ -281,7 +295,12 @@ class PetDatabase {
         content TEXT NOT NULL,
         status TEXT NOT NULL,
         epistemic_basis TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 0.8,
+        valid_from TEXT,
+        valid_to TEXT,
         continuity_value REAL NOT NULL DEFAULT 0,
+        continuity_score_version TEXT NOT NULL DEFAULT 'unknown-legacy',
+        continuity_components_json TEXT NOT NULL DEFAULT '{}',
         superseded_by TEXT,
         source_run_id TEXT,
         idempotency_key TEXT NOT NULL UNIQUE,
@@ -322,6 +341,8 @@ class PetDatabase {
         status TEXT NOT NULL DEFAULT 'open',
         priority REAL NOT NULL DEFAULT 0.5,
         continuity_value REAL NOT NULL DEFAULT 0.8,
+        continuity_score_version TEXT NOT NULL DEFAULT 'unknown-legacy',
+        continuity_components_json TEXT NOT NULL DEFAULT '{}',
         resolution_summary TEXT,
         resolution_event_id TEXT,
         source_run_id TEXT,
@@ -373,6 +394,70 @@ class PetDatabase {
         FOREIGN KEY (session_id) REFERENCES sessions(id)
       );
 
+      CREATE TABLE IF NOT EXISTS topic_aliases (
+        id TEXT PRIMARY KEY,
+        alias TEXT NOT NULL,
+        normalized_alias TEXT NOT NULL UNIQUE,
+        topic_id TEXT NOT NULL,
+        source_run_id TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (topic_id) REFERENCES topic_threads(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS topic_alias_evidence (
+        alias_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (alias_id, event_id),
+        FOREIGN KEY (alias_id) REFERENCES topic_aliases(id),
+        FOREIGN KEY (event_id) REFERENCES events(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS topic_relations (
+        source_topic_id TEXT NOT NULL,
+        target_topic_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        source_run_id TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (source_topic_id, target_topic_id, relation),
+        FOREIGN KEY (source_topic_id) REFERENCES topic_threads(id),
+        FOREIGN KEY (target_topic_id) REFERENCES topic_threads(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS topic_health_runs (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL,
+        trigger_type TEXT NOT NULL,
+        base_version INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        signals_json TEXT NOT NULL DEFAULT '{}',
+        findings_json TEXT NOT NULL DEFAULT '[]',
+        recommendation TEXT NOT NULL DEFAULT 'healthy',
+        source_run_id TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (topic_id) REFERENCES topic_threads(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS topic_rebuild_runs (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL,
+        health_run_id TEXT,
+        base_version INTEGER NOT NULL,
+        result_version INTEGER,
+        status TEXT NOT NULL,
+        source_event_ids_json TEXT NOT NULL DEFAULT '[]',
+        source_hash TEXT NOT NULL UNIQUE,
+        model_version TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        raw_output_json TEXT NOT NULL DEFAULT '{}',
+        applied_json TEXT NOT NULL DEFAULT '{}',
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        error TEXT,
+        FOREIGN KEY (topic_id) REFERENCES topic_threads(id),
+        FOREIGN KEY (health_run_id) REFERENCES topic_health_runs(id)
+      );
+
       CREATE TABLE IF NOT EXISTS state_documents (
         id TEXT PRIMARY KEY,
         state_type TEXT NOT NULL UNIQUE,
@@ -390,6 +475,7 @@ class PetDatabase {
         operations_json TEXT NOT NULL DEFAULT '[]',
         resulting_state_json TEXT NOT NULL,
         source_run_id TEXT,
+        idempotency_key TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (document_id) REFERENCES state_documents(id)
       );
@@ -428,6 +514,10 @@ class PetDatabase {
       CREATE INDEX IF NOT EXISTS idx_topic_event_links_event ON topic_event_links(event_id);
       CREATE INDEX IF NOT EXISTS idx_open_loops_topic_status ON open_loops(topic_id, status, priority DESC);
       CREATE INDEX IF NOT EXISTS idx_continuity_runs_time ON continuity_update_runs(started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_topic_aliases_topic ON topic_aliases(topic_id);
+      CREATE INDEX IF NOT EXISTS idx_topic_relations_target ON topic_relations(target_topic_id, relation);
+      CREATE INDEX IF NOT EXISTS idx_topic_health_topic ON topic_health_runs(topic_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_topic_rebuild_topic ON topic_rebuild_runs(topic_id, started_at DESC);
     `);
 
     const ensureColumn = (table, column, definition) => {
@@ -436,9 +526,31 @@ class PetDatabase {
     };
     ensureColumn("messages", "memory_processed_at", "TEXT");
     ensureColumn("events", "continuity_value", "REAL NOT NULL DEFAULT 0");
+    ensureColumn("events", "continuity_score_version", "TEXT NOT NULL DEFAULT 'unknown-legacy'");
+    ensureColumn("events", "continuity_components_json", "TEXT NOT NULL DEFAULT '{}'");
     ensureColumn("memory_claims", "epistemic_basis", "TEXT NOT NULL DEFAULT 'unknown_legacy'");
     ensureColumn("context_snapshots", "continuity_refs_json", "TEXT NOT NULL DEFAULT '{}'");
     ensureColumn("continuity_update_runs", "source_message_ids_json", "TEXT NOT NULL DEFAULT '[]'");
+    ensureColumn("state_revisions", "idempotency_key", "TEXT");
+    ensureColumn("retrieval_logs", "score_version", "TEXT NOT NULL DEFAULT 'memory-retrieval-v1'");
+    ensureColumn("retrieval_logs", "route_json", "TEXT NOT NULL DEFAULT '{}'");
+    ensureColumn("retrieval_logs", "selected_topic_ids_json", "TEXT NOT NULL DEFAULT '[]'");
+    ensureColumn("retrieval_logs", "selected_topic_item_ids_json", "TEXT NOT NULL DEFAULT '[]'");
+    ensureColumn("retrieval_logs", "selected_open_loop_ids_json", "TEXT NOT NULL DEFAULT '[]'");
+    ensureColumn("retrieval_logs", "outcome_json", "TEXT NOT NULL DEFAULT '{}'");
+    ensureColumn("topic_threads", "continuity_score_version", "TEXT NOT NULL DEFAULT 'unknown-legacy'");
+    ensureColumn("topic_threads", "continuity_components_json", "TEXT NOT NULL DEFAULT '{}'");
+    ensureColumn("topic_threads", "canonical_topic_id", "TEXT");
+    ensureColumn("topic_threads", "active_item_ids_json", "TEXT NOT NULL DEFAULT '[]'");
+    ensureColumn("topic_threads", "tentative_item_ids_json", "TEXT NOT NULL DEFAULT '[]'");
+    ensureColumn("topic_items", "continuity_score_version", "TEXT NOT NULL DEFAULT 'unknown-legacy'");
+    ensureColumn("topic_items", "continuity_components_json", "TEXT NOT NULL DEFAULT '{}'");
+    ensureColumn("topic_items", "confidence", "REAL NOT NULL DEFAULT 0.8");
+    ensureColumn("topic_items", "valid_from", "TEXT");
+    ensureColumn("topic_items", "valid_to", "TEXT");
+    ensureColumn("open_loops", "continuity_score_version", "TEXT NOT NULL DEFAULT 'unknown-legacy'");
+    ensureColumn("open_loops", "continuity_components_json", "TEXT NOT NULL DEFAULT '{}'");
+    this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_state_revisions_idempotency ON state_revisions(idempotency_key) WHERE idempotency_key IS NOT NULL");
     this.db.run(
       `UPDATE memory_claims SET epistemic_basis = 'stated_by_user'
        WHERE epistemic_basis = 'unknown_legacy' AND EXISTS (
@@ -466,6 +578,10 @@ class PetDatabase {
     );
     this.db.run(
       "UPDATE continuity_update_runs SET status = 'interrupted', error = $error, completed_at = $now WHERE status = 'running'",
+      { $error: error, $now: now },
+    );
+    this.db.run(
+      "UPDATE topic_rebuild_runs SET status = 'interrupted', error = $error, completed_at = $now WHERE status = 'running'",
       { $error: error, $now: now },
     );
   }

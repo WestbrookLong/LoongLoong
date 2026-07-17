@@ -2,7 +2,7 @@
 
 Local-first AI pet desktop prototype with text/voice chat, inspectable SQLite memory, event capture, retrieval, and daily consolidation.
 
-## Memory v0.3
+## Memory v0.4
 
 Detailed architecture, schema, algorithms, and implementation notes: [Memory_Design.md](./Memory_Design.md).
 
@@ -19,6 +19,11 @@ Pet keeps raw messages immutable and builds derived memory in separate layers:
 - open loops track unresolved questions, tasks, commitments, and explicit continuations with resolution evidence
 - a continuity router handles low-information prompts such as "continue" before ordinary claim/event retrieval
 - context snapshots reference canonical topic and open-loop versions instead of becoming their source of truth
+- claims and topic items carry epistemic source, status, confidence, and validity into the reply prompt
+- evidence-bound state reducers maintain Agent corrections, behavior adjustments, failure modes, commitments, interaction boundaries, and recurring tensions
+- retrieval logs record score versions, routes, and the exact Topic, Item, and Open Loop IDs injected into a turn
+- Topic Health checks treat age and revision count as signals only; evidence-backed rebuilds repair current materialized state without recreating history
+- Topic aliases and merges resolve through a canonical Topic while preserving old IDs and evidence
 
 The development inspector exposes context snapshots, extraction runs, compaction runs, claims, evidence, and claim relations. Context and memory model settings are configurable independently from the chat model.
 

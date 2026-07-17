@@ -28,11 +28,15 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
     { id: "extractions", label: "智能提取" },
     { id: "claim_relations", label: "记忆关系" },
     { id: "state_documents", label: "持续状态" },
+    { id: "state_revisions", label: "状态修订" },
+    { id: "topic_aliases", label: "主题别名" },
   ],
   logs: [
     { id: "logs", label: "运行日志" },
     { id: "compactions", label: "压缩运行" },
     { id: "continuity_runs", label: "连续性更新" },
+    { id: "topic_health", label: "主题健康" },
+    { id: "topic_rebuilds", label: "主题重建" },
   ],
 };
 
@@ -94,6 +98,7 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "content", label: "内容" },
     { key: "status", label: "状态", width: "90px" },
     { key: "epistemic_basis", label: "认识来源", width: "130px" },
+    { key: "confidence", label: "置信度", width: "80px" },
     { key: "topic_title", label: "主题", width: "160px" },
   ],
   open_loops: [
@@ -142,6 +147,34 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "current_state_json", label: "当前状态" },
     { key: "version", label: "版本", width: "70px" },
     { key: "updated_at", label: "更新时间", width: "150px" },
+  ],
+  state_revisions: [
+    { key: "state_type", label: "状态对象", width: "130px" },
+    { key: "base_version", label: "原版本", width: "75px" },
+    { key: "result_version", label: "新版本", width: "75px" },
+    { key: "operations_json", label: "操作与证据" },
+    { key: "created_at", label: "时间", width: "150px" },
+  ],
+  topic_aliases: [
+    { key: "alias", label: "别名" },
+    { key: "topic_title", label: "Canonical 主题" },
+    { key: "source_run_id", label: "来源 Run", width: "180px" },
+    { key: "created_at", label: "时间", width: "150px" },
+  ],
+  topic_health: [
+    { key: "recommendation", label: "建议", width: "150px" },
+    { key: "topic_title", label: "主题", width: "180px" },
+    { key: "trigger_type", label: "触发", width: "130px" },
+    { key: "findings_json", label: "发现" },
+    { key: "created_at", label: "时间", width: "150px" },
+  ],
+  topic_rebuilds: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "topic_title", label: "主题", width: "180px" },
+    { key: "base_version", label: "原版本", width: "75px" },
+    { key: "result_version", label: "新版本", width: "75px" },
+    { key: "applied_json", label: "应用结果" },
+    { key: "started_at", label: "时间", width: "150px" },
   ],
 };
 

@@ -53,6 +53,8 @@ export interface Dashboard {
   topics: number;
   openLoops: number;
   continuityUpdates: number;
+  topicHealthWarnings: number;
+  topicRebuilds: number;
   databasePath: string;
 }
 

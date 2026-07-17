@@ -8,7 +8,7 @@
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "build": "tsc --noEmit && vite build",
     "start": "electron .",
-    "test": "node --test tests/memory.test.cjs tests/model.test.cjs tests/intelligence.test.cjs tests/continuity.test.cjs"
+    "test": "node --test tests/memory.test.cjs tests/model.test.cjs tests/intelligence.test.cjs tests/continuity.test.cjs tests/state-governance.test.cjs"
   },
   "dependencies": {
     "lucide-react": "0.475.0",

@@ -1,0 +1,23 @@
+[
+  {
+    "name": "low information continues active topic",
+    "query": "continue",
+    "active_topic": "pet_memory",
+    "expected_topic": "pet_memory",
+    "expected_route": "continue_current"
+  },
+  {
+    "name": "topic title reopens old topic",
+    "query": "Pet memory architecture",
+    "active_topic": "voice_runtime",
+    "expected_topic": "pet_memory",
+    "expected_route": "reopen_old_topic"
+  },
+  {
+    "name": "unrelated query starts a new topic",
+    "query": "Plan a garden irrigation schedule",
+    "active_topic": "pet_memory",
+    "expected_topic": null,
+    "expected_route": "new_topic"
+  }
+]

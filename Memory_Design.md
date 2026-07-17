@@ -1,9 +1,9 @@
 # Pet 记忆系统设计与技术实现
 
-> 文档版本：Memory v0.3  
+> 文档版本：Memory v0.4
 > 对应工程：Pet v0.1  
 > 状态：描述当前仓库中已经实现的行为，不把规划能力视为现有能力  
-> 核心代码：[electron/memory.cjs](./electron/memory.cjs)、[electron/memory-intelligence.cjs](./electron/memory-intelligence.cjs)、[electron/database.cjs](./electron/database.cjs)、[electron/main.cjs](./electron/main.cjs)
+> 核心代码：[electron/memory.cjs](./electron/memory.cjs)、[electron/memory-intelligence.cjs](./electron/memory-intelligence.cjs)、[electron/continuity.cjs](./electron/continuity.cjs)、[electron/state.cjs](./electron/state.cjs)、[electron/topic-governance.cjs](./electron/topic-governance.cjs)、[electron/database.cjs](./electron/database.cjs)、[electron/main.cjs](./electron/main.cjs)
 
 ## 1. 设计目标
 
@@ -74,7 +74,7 @@ flowchart TB
 | 上下文层 | `context_snapshots` | 会话内长期保留 | 压缩旧对话，维持当前任务连续性 |
 | 审计层 | `memory_extraction_runs`, `context_compaction_runs`, `consolidation_runs`, `retrieval_logs`, `logs` | 开发期长期保留 | 解释每次记忆为何产生、何时产生、是否失败 |
 
-### 2.2 v0.3 连续性状态层
+### 2.2 v0.4 连续性与行为状态层
 
 Memory v0.3 在原有五层之上增加了跨 Session 的连续性对象：
 
@@ -85,9 +85,24 @@ Memory v0.3 在原有五层之上增加了跨 Session 的连续性对象：
 | 未完成事项 | `open_loops`, `open_loop_evidence` | 保存问题、任务、承诺和明确约定的后续讨论 |
 | 运行连续性 | `continuity_state` | 单例保存 active topic、最近主题和切换时间 |
 | 连续性审计 | `continuity_update_runs` | 保存 LLM proposal、确定性 reducer 实际操作和拒绝原因 |
-| 人格状态底座 | `state_documents`, `state_revisions` | 为 Relationship/Self Model 提供版本化容器；当前不自动修改人格 |
+| Agent 行为状态 | `state_documents`, `state_revisions`, `state_revision_evidence` | 保存用户纠正、行为调整、失败模式和 Agent Commitment 引用 |
+| 克制的关系状态 | 同上 | 只保存 interaction style、trust boundary 和 recurring tension，不推断亲密度或信任分数 |
+| Topic 治理 | `topic_aliases`, `topic_relations` | 提供 Alias、Merge、canonical Topic 解析；旧 Topic 和引用不删除 |
+| Topic 健康与重建 | `topic_health_runs`, `topic_rebuild_runs` | 记录结构一致性检查，并在有证据的异常下重建 materialized state |
 
 Session 仍然是模型上下文和消息分段，不是关系重置。Topic、Open Loop 和状态文档都可以跨 Session 存在。
+
+### 2.3 v0.4 的执行边界
+
+- Claim 和 Topic Item 注入同时携带 `status`、`epistemic_basis`、`confidence`、`valid_from` 和 `valid_to`；`inferred`、`unknown_legacy` 与 `disputed` 不能被表达成用户明确说过的事实。
+- `unknown_legacy` 只用于读取迁移前旧数据，新 proposal 会被规范为有证据的认识来源。
+- `state_updates` 由 LLM 提议，`state.cjs` 校验证据、版本、scope、持久性、操作白名单和幂等性后才写入。
+- 临时要求保留在 Session Context；只有明确长期表达或重复独立证据才能形成全局 Behavior Adjustment。
+- Agent Commitment 以 `open_loops` 为事实来源，Self Model 只保存未完成 Commitment ID。
+- Relationship 第一版不允许写 relationship summary、shared moments、亲密度或信任分数。
+- Topic 的时间和 Revision 数只产生 Health Check 候选信号，不会直接触发 Rebuild。
+- Rebuild 只生成 overview、current position、active/tentative Item ID 集合和冲突报告；已有 Item 默认复用，Open Loop 状态不在 Rebuild 中修改。
+- Merge 通过 `canonical_topic_id` 和 `merged_into` 保留旧 Topic。所有连续性读取会解析 canonical Topic 并聚合 Topic Family。
 
 ## 3. 一轮聊天中的记忆生命周期
 
@@ -458,13 +473,11 @@ tail_budget = max(800, floor(C * max(0.2, targetRatio - 0.12)))
 输出包括：
 
 - `daily_narrative`；
-- `recurring_patterns`；
-- `relationship_updates`；
-- `open_loops`；
 - `discarded_as_transient`；
-- 以 `source_event_ids` 为证据的 `memory_output.claim_candidates`。
+- 以 `source_event_ids` 为证据的 `memory_output.claim_candidates`；
+- 包含 Topic、Open Loop、State、Health 和 Topic Governance proposal 的 `continuity_output`。
 
-当前正式落库的部分是 `daily_narrative`、`memory_output` 和 `continuity_output`。其中 `continuity_output` 通过 reducer 更新 Topic 和 Open Loop。旧协议中的 `recurring_patterns`、`relationship_updates` 和自由结构 `open_loops` 不会直接落库；Relationship/Self Model 的自动更新仍未开启。
+正式落库的部分是 `daily_narrative`、`memory_output` 和 `continuity_output`。`continuity_output` 中的每类 proposal 都经过对应的确定性 reducer：Topic/Open Loop 由 `continuity.cjs` 处理，Self/Relationship State 由 `state.cjs` 处理，Health/Alias/Merge 由 `topic-governance.cjs` 处理。
 
 ### 7.4 幂等与回退
 
@@ -867,7 +880,9 @@ API Key 不在该表中。它使用 Electron `safeStorage` 加密后保存在 `m
 
 ```text
 id, title, status, overview, current_position,
-continuity_value, current_revision_id,
+continuity_value, continuity_score_version, continuity_components_json,
+canonical_topic_id, active_item_ids_json, tentative_item_ids_json,
+current_revision_id,
 created_at, last_active_at, version
 ```
 
@@ -877,7 +892,9 @@ created_at, last_active_at, version
 
 ```text
 id, topic_id, item_type, content, status,
-epistemic_basis, continuity_value, superseded_by,
+epistemic_basis, confidence, valid_from, valid_to,
+continuity_value, continuity_score_version, continuity_components_json,
+superseded_by,
 source_run_id, idempotency_key, created_at, updated_at
 ```
 
@@ -888,6 +905,7 @@ source_run_id, idempotency_key, created_at, updated_at
 ```text
 id, topic_id, loop_type, owner, description, status,
 priority, continuity_value, resolution_summary,
+continuity_score_version, continuity_components_json,
 resolution_event_id, source_run_id, idempotency_key,
 created_at, last_touched_at, resolved_at, version
 ```
@@ -903,6 +921,12 @@ Open Loop 只有 `open`、`resolved` 和 `abandoned` 三种状态。解决或放
 - reducer 实际应用或拒绝的 operations；
 - 模型和 prompt 版本；
 - 失败或中断原因。
+
+`state_documents` 保存 `self_model` 和 `relationship` 的当前 materialized JSON；`state_revisions` 保存 base/result version、逐项操作、证据 Event ID 和 resulting state。所有更新要求 `expected_version`，并通过 idempotency key 去重。
+
+`topic_aliases` 将规范化别名映射到 canonical Topic；`topic_relations` 保存 `merged_into`。旧 Topic 只标为 `merged` 并设置 `canonical_topic_id`，历史 Item、Event、Open Loop 和 Snapshot 引用不改写。
+
+`topic_health_runs` 保存触发信号、结构/语义 findings 与 recommendation。`topic_rebuild_runs` 只消费 `rebuild_recommended` Health Run，并保存证据 Event 集、模型原始输出和应用后的 Topic Revision。
 
 ## 11. 运行状态、恢复与事务
 
@@ -950,6 +974,8 @@ running -> interrupted  // 应用退出后下次启动修复
 | `electron/memory.cjs` | 确定性事件捕获、秘密过滤、离线 claim、检索排序、token 估算、确定性每日整理 |
 | `electron/memory-intelligence.cjs` | LLM 提取、证据校验、claim upsert/reducer、上下文压缩、每日智能巩固、质量清理 |
 | `electron/continuity.cjs` | Topic/Open Loop reducer、认识论校验、连续性评分、路由、Prompt Context 和 Snapshot 引用 |
+| `electron/state.cjs` | Self/Relationship proposal、证据/Scope/持久性校验、版本化 reducer 和 Agent State Prompt Context |
+| `electron/topic-governance.cjs` | canonical Topic、Alias/Merge、Topic Family、Health Check、Rebuild reducer 和证据收集 |
 | `electron/model.cjs` | OpenAI-compatible 聊天、JSON completion、语音转写、连接测试 |
 | `electron/main.cjs` | 聊天编排、后台串行队列、定时任务、IPC、API Key 安全存储、窗口生命周期 |
 | `src/components/DataInspector.tsx` | 消息、事件、claim、每日摘要、快照、提取、关系、压缩、日志的开发检查界面 |
@@ -966,8 +992,9 @@ handleChat
        -> applyMemoryOutput
             -> insertSemanticEvent
             -> upsertIntelligentClaim
-  -> retrieveMemory
   -> routeContinuity + buildContinuityContext
+  -> buildStateContext
+  -> retrieveMemory + retrieval_logs continuity fields
   -> compactSessionContext (optional)
        -> structuredCompletion
        -> applyMemoryOutput
@@ -1052,11 +1079,14 @@ npm run build
 5. **没有周/月级层次压缩**：目前只有会话快照和每日巩固。
 6. **没有自动遗忘任务**：`valid_to`、`review_after`、recall count 已有字段，但没有周期性衰减、复审或归档作业。
 7. **每日冲刷只处理 active session**：历史已结束 session 中遗留的未处理消息不会被当前 flush 主动遍历。
-8. **关系与自我状态尚未自动更新**：`state_documents` 已建立版本化底座，但 recurring patterns、relationship updates 和 self-model proposal 还没有启用 reducer。
+8. **Successful Pattern 暂不自动写入**：Self Model 已支持纠正、行为调整、失败模式和 Commitment，但成功模式仍保持只读，避免 Agent 根据自己的输出自我奖励。
 9. **工具结果缺少强类型凭证**：assistant 声明已完成某项操作时，当前主要依赖 prompt 约束，还未绑定 Hermes/tool execution receipt。
 10. **sql.js 写放大**：每次持久化会导出整个数据库文件，适合当前单用户原型，不适合高并发或大型数据量。
 11. **中断任务不续跑**：启动时只标为 interrupted，依靠后续新任务重新处理。
 12. **隐私分级尚未完整执行**：schema 有 sensitivity，但目前主要只有 secrets 过滤和 `private` 默认值。
+13. **Topic Split 尚未实现**：当前先实现 Alias、Merge 和 canonical 读取，避免在数据不足时引入高风险拆分。
+14. **Health Check 的语义异常依赖证据化模型报告**：确定性检查可发现非法 Item 引用和状态集合错误；Position 与 Decision 的语义冲突仍由 LLM 提出候选 finding，再由 reducer 校验证据。
+15. **连续性权重尚未调参**：v0.4 已保存 score version、评分分量、路由、实际注入对象和后续纠正信号，但在线数据不会自动修改权重。
 
 ## 17. 后续技术实现路径
 
