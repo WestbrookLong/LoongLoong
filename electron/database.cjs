@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const initSqlJs = require("sql.js");
+const { getContinuityProfile } = require("./continuity-profiles.cjs");
 
 const isoNow = () => new Date().toISOString();
 const localDate = (date = new Date()) => {
@@ -458,6 +459,91 @@ class PetDatabase {
         FOREIGN KEY (health_run_id) REFERENCES topic_health_runs(id)
       );
 
+      CREATE TABLE IF NOT EXISTS topic_merge_candidates (
+        id TEXT PRIMARY KEY,
+        pair_key TEXT NOT NULL UNIQUE,
+        topic_a_id TEXT NOT NULL,
+        topic_b_id TEXT NOT NULL,
+        topic_a_version INTEGER NOT NULL,
+        topic_b_version INTEGER NOT NULL,
+        discovery_trigger TEXT NOT NULL,
+        discovery_version TEXT NOT NULL,
+        lexical_score REAL NOT NULL DEFAULT 0,
+        structural_score REAL NOT NULL DEFAULT 0,
+        score_components_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending_model',
+        decision TEXT,
+        model_confidence REAL,
+        rationale TEXT,
+        evidence_event_ids_json TEXT NOT NULL DEFAULT '[]',
+        canonical_target_topic_id TEXT,
+        source_hash TEXT NOT NULL,
+        model_version TEXT,
+        prompt_version TEXT,
+        raw_output_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        adjudicated_at TEXT,
+        applied_at TEXT,
+        error TEXT,
+        FOREIGN KEY (topic_a_id) REFERENCES topic_threads(id),
+        FOREIGN KEY (topic_b_id) REFERENCES topic_threads(id),
+        FOREIGN KEY (canonical_target_topic_id) REFERENCES topic_threads(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS topic_merge_candidate_evidence (
+        candidate_id TEXT NOT NULL,
+        topic_side TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        relation TEXT NOT NULL DEFAULT 'supports_comparison',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (candidate_id, topic_side, event_id),
+        FOREIGN KEY (candidate_id) REFERENCES topic_merge_candidates(id),
+        FOREIGN KEY (event_id) REFERENCES events(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS continuity_profile_state (
+        id TEXT PRIMARY KEY,
+        active_profile_id TEXT NOT NULL,
+        challenger_profile_id TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS continuity_profiles (
+        id TEXT PRIMARY KEY,
+        profile_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source_eval_run_id TEXT,
+        created_at TEXT NOT NULL,
+        approved_at TEXT,
+        activated_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS continuity_feedback (
+        id TEXT PRIMARY KEY,
+        retrieval_log_id TEXT,
+        expected_topic_id TEXT,
+        expected_route TEXT,
+        feedback_type TEXT NOT NULL,
+        source TEXT NOT NULL,
+        strength TEXT NOT NULL,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (retrieval_log_id) REFERENCES retrieval_logs(id),
+        FOREIGN KEY (expected_topic_id) REFERENCES topic_threads(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS continuity_eval_runs (
+        id TEXT PRIMARY KEY,
+        dataset_version TEXT NOT NULL,
+        baseline_profile_id TEXT NOT NULL,
+        candidate_profile_ids_json TEXT NOT NULL DEFAULT '[]',
+        metrics_json TEXT NOT NULL DEFAULT '{}',
+        recommendation_json TEXT NOT NULL DEFAULT '{}',
+        details_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS state_documents (
         id TEXT PRIMARY KEY,
         state_type TEXT NOT NULL UNIQUE,
@@ -518,6 +604,11 @@ class PetDatabase {
       CREATE INDEX IF NOT EXISTS idx_topic_relations_target ON topic_relations(target_topic_id, relation);
       CREATE INDEX IF NOT EXISTS idx_topic_health_topic ON topic_health_runs(topic_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_topic_rebuild_topic ON topic_rebuild_runs(topic_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_topic_merge_status ON topic_merge_candidates(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_topic_merge_topics ON topic_merge_candidates(topic_a_id, topic_b_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_continuity_feedback_retrieval ON continuity_feedback(retrieval_log_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_continuity_eval_time ON continuity_eval_runs(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_continuity_profiles_status ON continuity_profiles(status, created_at DESC);
     `);
 
     const ensureColumn = (table, column, definition) => {
@@ -584,6 +675,10 @@ class PetDatabase {
       "UPDATE topic_rebuild_runs SET status = 'interrupted', error = $error, completed_at = $now WHERE status = 'running'",
       { $error: error, $now: now },
     );
+    this.db.run(
+      "UPDATE topic_merge_candidates SET status = 'interrupted', error = $error, updated_at = $now WHERE status = 'adjudicating'",
+      { $error: error, $now: now },
+    );
   }
 
   seed() {
@@ -617,6 +712,24 @@ class PetDatabase {
       `INSERT OR IGNORE INTO continuity_state
        (id, recent_topic_ids_json, updated_at) VALUES ('primary', '[]', $updatedAt)`,
       { $updatedAt: stamp },
+    );
+    this.db.run(
+      `INSERT OR IGNORE INTO continuity_profile_state
+       (id, active_profile_id, updated_at) VALUES ('primary', 'continuity-profile-v1', $updatedAt)`,
+      { $updatedAt: stamp },
+    );
+    const baselineProfile = getContinuityProfile();
+    this.db.run(
+      `INSERT OR IGNORE INTO continuity_profiles
+       (id, profile_json, status, created_at, approved_at, activated_at)
+       VALUES ($id, $profile, 'baseline', $createdAt, $approvedAt, $activatedAt)`,
+      {
+        $id: baselineProfile.id,
+        $profile: JSON.stringify(baselineProfile),
+        $createdAt: stamp,
+        $approvedAt: stamp,
+        $activatedAt: stamp,
+      },
     );
     const stateDefaults = {
       relationship: {

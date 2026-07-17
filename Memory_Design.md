@@ -1,9 +1,9 @@
 # Pet 记忆系统设计与技术实现
 
-> 文档版本：Memory v0.4
+> 文档版本：Memory v0.5
 > 对应工程：Pet v0.1  
 > 状态：描述当前仓库中已经实现的行为，不把规划能力视为现有能力  
-> 核心代码：[electron/memory.cjs](./electron/memory.cjs)、[electron/memory-intelligence.cjs](./electron/memory-intelligence.cjs)、[electron/continuity.cjs](./electron/continuity.cjs)、[electron/state.cjs](./electron/state.cjs)、[electron/topic-governance.cjs](./electron/topic-governance.cjs)、[electron/database.cjs](./electron/database.cjs)、[electron/main.cjs](./electron/main.cjs)
+> 核心代码：[electron/memory.cjs](./electron/memory.cjs)、[electron/memory-intelligence.cjs](./electron/memory-intelligence.cjs)、[electron/continuity.cjs](./electron/continuity.cjs)、[electron/state.cjs](./electron/state.cjs)、[electron/topic-governance.cjs](./electron/topic-governance.cjs)、[electron/topic-merge.cjs](./electron/topic-merge.cjs)、[electron/continuity-profiles.cjs](./electron/continuity-profiles.cjs)、[electron/continuity-eval.cjs](./electron/continuity-eval.cjs)、[electron/database.cjs](./electron/database.cjs)、[electron/main.cjs](./electron/main.cjs)
 
 ## 1. 设计目标
 
@@ -608,6 +608,26 @@ continuity_value =
 
 Open Loop 最低为 `0.80`；Agent commitment、用户纠正和互动边界最低为 `0.90`。该值影响 Topic/Open Loop 保护和注入顺序，不会代替 Claim promotion score。
 
+### 8.8 Topic 语义合并与连续性校准闭环
+
+Topic 合并使用“确定性召回、LLM 裁决、确定性执行”三段式流程：
+
+1. 新 Topic 创建或更新后，`discoverMergeCandidates()` 使用标题、Alias、overview、current position、Item 和 Open Loop 的词项重叠召回最多 5 个候选；每日巩固和 Inspector 手动扫描也会触发该步骤。
+2. `adjudicateMergeCandidate()` 向模型提供双方 materialized state 和原始 Event 摘录，只允许返回 `same_topic`、`related_but_distinct`、`distinct` 或 `uncertain`。
+3. 自动 Merge 必须同时满足：模型置信度至少 `0.92`、证据覆盖双方 Topic、Topic 版本仍匹配，并且标题/Alias 精确匹配或本地词法分至少 `0.35`。
+4. 低词法但模型认为语义相同的候选进入 `pending_review`；`related_but_distinct` 只写 `related_to`；高置信 `distinct` 写 `distinct_from` 并阻止重复扫描。
+5. canonical Topic 由 reducer 选择，默认保留创建时间更早的 ID。旧 Topic 只写 `merged` 和 `canonical_topic_id`，历史引用不迁移。
+
+连续性评分拆成两个独立版本：`continuity-value-v1` 负责持久性价值，`topic-router-v1` 负责 Topic 路由。所有参数位于版本化 Profile 中。固定评测集比较 route accuracy、macro F1、false reopen、duplicate new topic、must-keep recall、Open Loop recall、pairwise ranking 和 token-weighted recall。
+
+离线搜索只产生报告。候选 Profile 必须经过以下显式状态迁移：
+
+```text
+evaluation candidate -> Shadow challenger -> manually promoted Active
+```
+
+Shadow 阶段每轮同时计算 active/challenger 路由，但只执行 active 结果。线上纠错只写 `continuity_feedback`，永远不会直接修改权重。
+
 ## 9. Claim 状态机
 
 ```mermaid
@@ -928,6 +948,17 @@ Open Loop 只有 `open`、`resolved` 和 `abandoned` 三种状态。解决或放
 
 `topic_health_runs` 保存触发信号、结构/语义 findings 与 recommendation。`topic_rebuild_runs` 只消费 `rebuild_recommended` Health Run，并保存证据 Event 集、模型原始输出和应用后的 Topic Revision。
 
+### 10.18 Topic Merge 与评分评测表
+
+- `topic_merge_candidates`：保存 Topic 对、双方版本、发现分量、模型决定、置信度、证据、source hash、状态和应用结果。
+- `topic_merge_candidate_evidence`：区分 `a`/`b` 两侧保存参与比较的 Event，自动 Merge 时要求最终 supporting evidence 覆盖双方。
+- `continuity_profiles`：保存 Profile JSON、baseline/candidate/approved 状态和来源评测 Run。
+- `continuity_profile_state`：单例保存 active 和 challenger Profile ID。
+- `continuity_feedback`：保存立即纠错等线上观察信号；未定位到正确 Topic 时只能作为 weak label。
+- `continuity_eval_runs`：保存数据集版本、baseline/challenger 指标、推荐结论和完整候选 Profile。
+
+`npm run eval:continuity -- --search` 在固定 fixture 上运行离线搜索。开发面板中的“运行评测”通过 Electron 当前数据库连接持久化报告，避免另一个 sql.js 进程并发覆盖数据库文件。
+
 ## 11. 运行状态、恢复与事务
 
 ### 11.1 Run 状态
@@ -1060,6 +1091,8 @@ handleChat
 - LLM 改变 claim schema 时，相同规范事实仍会去重；
 - 文本模型使用独立 `chatBaseUrl`；
 - Qwen ASR 使用 chat completions 音频协议。
+- Topic 候选发现保持幂等，语义相同但低词法候选不会自动合并；相关 Topic 只建立关系。
+- 连续性 Profile 可离线评测、进入 Shadow，并且只有显式操作才能发布为 Active。
 
 运行：
 
@@ -1086,7 +1119,8 @@ npm run build
 12. **隐私分级尚未完整执行**：schema 有 sensitivity，但目前主要只有 secrets 过滤和 `private` 默认值。
 13. **Topic Split 尚未实现**：当前先实现 Alias、Merge 和 canonical 读取，避免在数据不足时引入高风险拆分。
 14. **Health Check 的语义异常依赖证据化模型报告**：确定性检查可发现非法 Item 引用和状态集合错误；Position 与 Decision 的语义冲突仍由 LLM 提出候选 finding，再由 reducer 校验证据。
-15. **连续性权重尚未调参**：v0.4 已保存 score version、评分分量、路由、实际注入对象和后续纠正信号，但在线数据不会自动修改权重。
+15. **连续性评测数据仍小**：v0.5 已实现固定评测、参数搜索、Shadow 和人工发布，但当前 fixture 只覆盖核心路由与评分安全约束；样本不足时应保持 baseline，不能把满分误认为已经完成真实校准。
+16. **Topic 候选召回尚未使用 embedding**：当前 LLM 已负责候选对的语义裁决，但第一阶段候选发现仍依赖本地词项和结构重叠。低词法的远距离同义 Topic 可能无法进入裁决队列。
 
 ## 17. 后续技术实现路径
 

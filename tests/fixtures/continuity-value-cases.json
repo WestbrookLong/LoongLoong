@@ -1,0 +1,52 @@
+[
+  {
+    "id": "commitment-floor",
+    "type": "minimum",
+    "kind": "commitment",
+    "signals": {},
+    "expected_min": 0.9,
+    "must_keep": true
+  },
+  {
+    "id": "correction-floor",
+    "type": "minimum",
+    "kind": "correction",
+    "signals": {},
+    "expected_min": 0.9,
+    "must_keep": true
+  },
+  {
+    "id": "boundary-floor",
+    "type": "minimum",
+    "kind": "boundary",
+    "signals": {},
+    "expected_min": 0.9,
+    "must_keep": true
+  },
+  {
+    "id": "open-loop-floor",
+    "type": "minimum",
+    "kind": "open_loop",
+    "signals": {},
+    "expected_min": 0.8,
+    "must_keep": true
+  },
+  {
+    "id": "future-decision-over-smalltalk",
+    "type": "pairwise",
+    "higher": { "kind": "ordinary", "signals": { "future_reference": 0.9, "error_prevention": 0.8, "cross_session": 0.7 } },
+    "lower": { "kind": "ordinary", "signals": { "future_reference": 0.1, "unresolvedness": 0.1 } }
+  },
+  {
+    "id": "unresolved-over-closed",
+    "type": "pairwise",
+    "higher": { "kind": "ordinary", "signals": { "unresolvedness": 1, "future_reference": 0.7 } },
+    "lower": { "kind": "ordinary", "signals": { "identity_relationship": 0.2 } }
+  },
+  {
+    "id": "error-prevention-over-repetition",
+    "type": "pairwise",
+    "higher": { "kind": "ordinary", "signals": { "error_prevention": 1, "cross_session": 0.6 } },
+    "lower": { "kind": "ordinary", "signals": { "cross_session": 0.3 } }
+  }
+]

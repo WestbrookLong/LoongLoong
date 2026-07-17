@@ -30,6 +30,7 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
     { id: "state_documents", label: "持续状态" },
     { id: "state_revisions", label: "状态修订" },
     { id: "topic_aliases", label: "主题别名" },
+    { id: "topic_merge_candidates", label: "合并候选" },
   ],
   logs: [
     { id: "logs", label: "运行日志" },
@@ -37,6 +38,9 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
     { id: "continuity_runs", label: "连续性更新" },
     { id: "topic_health", label: "主题健康" },
     { id: "topic_rebuilds", label: "主题重建" },
+    { id: "continuity_feedback", label: "连续性反馈" },
+    { id: "continuity_evals", label: "评分评测" },
+    { id: "continuity_profiles", label: "评分 Profile" },
   ],
 };
 
@@ -176,6 +180,34 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "applied_json", label: "应用结果" },
     { key: "started_at", label: "时间", width: "150px" },
   ],
+  topic_merge_candidates: [
+    { key: "status", label: "状态", width: "110px" },
+    { key: "topic_a_title", label: "主题 A" },
+    { key: "topic_b_title", label: "主题 B" },
+    { key: "decision", label: "模型判断", width: "150px" },
+    { key: "model_confidence", label: "置信度", width: "80px" },
+    { key: "created_at", label: "时间", width: "150px" },
+  ],
+  continuity_feedback: [
+    { key: "feedback_type", label: "反馈", width: "170px" },
+    { key: "retrieval_query", label: "原查询" },
+    { key: "source", label: "来源", width: "130px" },
+    { key: "strength", label: "强度", width: "80px" },
+    { key: "created_at", label: "时间", width: "150px" },
+  ],
+  continuity_evals: [
+    { key: "dataset_version", label: "数据集", width: "160px" },
+    { key: "baseline_profile_id", label: "Baseline", width: "180px" },
+    { key: "recommendation_json", label: "建议" },
+    { key: "created_at", label: "时间", width: "150px" },
+  ],
+  continuity_profiles: [
+    { key: "status", label: "状态", width: "100px" },
+    { key: "id", label: "Profile" },
+    { key: "is_active", label: "Active", width: "70px" },
+    { key: "is_challenger", label: "Shadow", width: "70px" },
+    { key: "created_at", label: "时间", width: "150px" },
+  ],
 };
 
 function displayValue(key: string, value: unknown) {
@@ -215,6 +247,10 @@ export function DataInspector({ kind, dashboard, onDashboard, notify }: Props) {
 
   const title = kind === "history" ? "数据记录" : kind === "memory" ? "记忆系统" : "运行日志";
   const activeColumns = useMemo(() => columns[active] || [], [active]);
+  const canStageProfile = active === "continuity_profiles" && selected
+    && ["candidate", "approved"].includes(String(selected.status))
+    && Number(selected.is_active) !== 1 && Number(selected.is_challenger) !== 1;
+  const canPromoteProfile = active === "continuity_profiles" && selected && Number(selected.is_challenger) === 1;
 
   const consolidate = async () => {
     setLoading(true);
@@ -229,6 +265,42 @@ export function DataInspector({ kind, dashboard, onDashboard, notify }: Props) {
     }
   };
 
+  const scanTopics = async () => {
+    setLoading(true);
+    try {
+      const result = await window.pet.scanTopics();
+      notify(`主题扫描完成，新增 ${result.candidateIds.length} 个候选。`);
+      onDashboard(await window.pet.getDashboard());
+      if (active === "topic_merge_candidates") await load();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const evaluateContinuity = async () => {
+    setLoading(true);
+    try {
+      const result = await window.pet.evaluateContinuity();
+      notify(result.recommendation.action === "keep_baseline" ? "评测完成，继续使用当前 Profile。" : "评测完成，已生成待复核 Challenger。" );
+      onDashboard(await window.pet.getDashboard());
+      await load();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const profileAction = async (action: "stage" | "promote") => {
+    if (!selected?.id) return;
+    setLoading(true);
+    try {
+      const result = await window.pet.continuityProfileAction({ action, profileId: String(selected.id) });
+      notify(result.applied ? (action === "stage" ? "Challenger 已进入 Shadow。" : "Profile 已设为 Active。") : `操作未应用：${result.reason || "校验未通过"}`);
+      await load();
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <main className="inspector-page">
       <header className="inspector-header">
@@ -237,10 +309,28 @@ export function DataInspector({ kind, dashboard, onDashboard, notify }: Props) {
           <span className="database-path"><Database size={13} /> {dashboard.databasePath}</span>
         </div>
         {kind === "memory" && (
-          <button className="command-button" onClick={consolidate} disabled={loading}>
+          <div className="inspector-actions">
+            <button className="secondary-button" onClick={scanTopics} disabled={loading}>
+              <Search size={17} />
+              扫描主题
+            </button>
+            <button className="command-button" onClick={consolidate} disabled={loading}>
+              <RefreshCw size={17} className={loading ? "spin" : ""} />
+              立即整理
+            </button>
+          </div>
+        )}
+        {kind === "logs" && active === "continuity_evals" && (
+          <button className="command-button" onClick={evaluateContinuity} disabled={loading}>
             <RefreshCw size={17} className={loading ? "spin" : ""} />
-            立即整理
+            运行评测
           </button>
+        )}
+        {kind === "logs" && (canStageProfile || canPromoteProfile) && (
+          <div className="inspector-actions">
+            {canStageProfile && <button className="secondary-button" onClick={() => profileAction("stage")} disabled={loading}>设为 Shadow</button>}
+            {canPromoteProfile && <button className="command-button" onClick={() => profileAction("promote")} disabled={loading}>设为 Active</button>}
+          </div>
         )}
       </header>
 

@@ -1,0 +1,38 @@
+[
+  {
+    "id": "continuation-phrase",
+    "features": { "activeTopicId": "pet_memory", "lowInformation": true, "aliasTopicId": null, "anaphora": false, "candidates": [] },
+    "expected_route": "continue_current",
+    "expected_topic_id": "pet_memory"
+  },
+  {
+    "id": "alias-reopens-old-topic",
+    "features": { "activeTopicId": "voice", "lowInformation": false, "aliasTopicId": "pet_memory", "anaphora": false, "candidates": [] },
+    "expected_route": "reopen_old_topic",
+    "expected_topic_id": "pet_memory"
+  },
+  {
+    "id": "strong-lexical-match",
+    "features": { "activeTopicId": "voice", "lowInformation": false, "aliasTopicId": null, "anaphora": false, "candidates": [{ "topicId": "pet_memory", "score": 0.4 }] },
+    "expected_route": "reopen_old_topic",
+    "expected_topic_id": "pet_memory"
+  },
+  {
+    "id": "related-but-weak-is-new",
+    "features": { "activeTopicId": "voice", "lowInformation": false, "aliasTopicId": null, "anaphora": false, "candidates": [{ "topicId": "pet_memory", "score": 0.18 }] },
+    "expected_route": "new_topic",
+    "expected_topic_id": null
+  },
+  {
+    "id": "anaphora-stays-ambiguous",
+    "features": { "activeTopicId": "pet_memory", "lowInformation": false, "aliasTopicId": null, "anaphora": true, "candidates": [{ "topicId": "voice", "score": 0.1 }] },
+    "expected_route": "ambiguous",
+    "expected_topic_id": "pet_memory"
+  },
+  {
+    "id": "unrelated-creates-topic",
+    "features": { "activeTopicId": "pet_memory", "lowInformation": false, "aliasTopicId": null, "anaphora": false, "candidates": [{ "topicId": "voice", "score": 0.08 }] },
+    "expected_route": "new_topic",
+    "expected_topic_id": null
+  }
+]

@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const { isoNow } = require("./database.cjs");
 const { containsForbiddenSecret, estimateTokens } = require("./memory.cjs");
+const { getContinuityProfile, profileState } = require("./continuity-profiles.cjs");
 const { applyStateUpdates, statePromptState, stateUpdateContract } = require("./state.cjs");
 const {
   applyGovernanceUpdates,
@@ -14,7 +15,7 @@ const {
 } = require("./topic-governance.cjs");
 
 const CONTINUITY_PROMPT_VERSION = "pet-continuity-v0.4";
-const CONTINUITY_SCORE_VERSION = "continuity-score-v1";
+const CONTINUITY_SCORE_VERSION = getContinuityProfile().value.version;
 const TOPIC_STATUSES = new Set(["open", "dormant", "resolved", "archived", "merged"]);
 const ITEM_TYPES = new Set(["evolution", "decision", "rationale", "rejected_idea", "unresolved_disagreement"]);
 const EPISTEMIC_BASES = new Set([
@@ -67,7 +68,8 @@ function calculateContinuityValue(signals = {}, kind = "ordinary") {
   return continuityScoreDetails(signals, kind).score;
 }
 
-function continuityScoreDetails(signals = {}, kind = "ordinary") {
+function continuityScoreDetails(signals = {}, kind = "ordinary", profileInput = null) {
+  const profile = getContinuityProfile(profileInput);
   const components = {
     future_reference: clamp(signals.future_reference),
     unresolvedness: clamp(signals.unresolvedness),
@@ -75,18 +77,18 @@ function continuityScoreDetails(signals = {}, kind = "ordinary") {
     identity_relationship: clamp(signals.identity_relationship),
     cross_session: clamp(signals.cross_session),
   };
-  const score =
-    0.3 * components.future_reference +
-    0.25 * components.unresolvedness +
-    0.2 * components.error_prevention +
-    0.15 * components.identity_relationship +
-    0.1 * components.cross_session;
-  const floor = kind === "commitment" || kind === "correction" || kind === "boundary"
-    ? 0.9
-    : kind === "open_loop"
-      ? 0.8
-      : 0;
-  return { score: Math.max(floor, clamp(score)), components, score_version: CONTINUITY_SCORE_VERSION, kind };
+  const score = Object.entries(components).reduce(
+    (sum, [name, value]) => sum + value * Number(profile.value.weights[name] || 0),
+    0,
+  );
+  const floor = Number(profile.value.floors[kind] ?? profile.value.floors.ordinary ?? 0);
+  return {
+    score: Math.max(floor, clamp(score)),
+    components,
+    score_version: profile.value.version,
+    profile_id: profile.id,
+    kind,
+  };
 }
 
 function continuityState(db) {
@@ -187,50 +189,88 @@ function lexicalScore(text, terms) {
   return clamp(terms.filter((term) => value.includes(term)).length / Math.min(5, terms.length));
 }
 
-function routeContinuity(db, query) {
+function extractRouteFeatures(db, query) {
   const state = continuityState(db);
   const active = state?.active_topic_id ? resolveCanonicalTopic(db, state.active_topic_id) : null;
   const lowInformation = /^(?:继续|接着|接着刚才|还是之前那个|上次说到哪(?:了)?|那这个怎么办|然后呢|我后来又想了想|continue|continue that|pick up where we left off)[。？！?!…\s]*$/i.test(String(query || "").trim());
-  if (lowInformation && active) {
-    return { intent: "continue_current", targetTopicId: active.id, confidence: 1, source: "continuation_phrase" };
-  }
-
   const aliasTopic = findTopicByAlias(db, query);
-  if (aliasTopic) {
-    return {
-      intent: aliasTopic.id === active?.id ? "continue_current" : "reopen_old_topic",
-      targetTopicId: aliasTopic.id,
-      confidence: 0.96,
-      source: "topic_alias",
-    };
-  }
-
   const terms = queryTerms(query);
   const scored = currentTopics(db, 12).map((topic) => {
     const items = topicItems(db, topic.id, 8).map((item) => item.content).join(" ");
     const aliases = db.all("SELECT alias FROM topic_aliases WHERE topic_id = $id", { $id: topic.id }).map((item) => item.alias).join(" ");
     const score = lexicalScore(`${topic.title} ${aliases} ${topic.overview} ${topic.current_position} ${items}`, terms);
-    return { topic, score };
+    return { topicId: topic.id, title: topic.title, score };
   }).sort((a, b) => b.score - a.score);
-  const best = scored[0];
-  if (best && best.score >= 0.22) {
+  return {
+    query: String(query || ""),
+    activeTopicId: active?.id || null,
+    lowInformation,
+    aliasTopicId: aliasTopic?.id || null,
+    anaphora: Boolean(active && /(?:这个|那个|刚才|之前|后来|还是)/.test(String(query || ""))),
+    candidates: scored.map((item) => ({
+      topicId: item.topicId,
+      title: item.title,
+      score: Number(item.score.toFixed(4)),
+    })),
+  };
+}
+
+function decideContinuityRoute(features, profileInput = null) {
+  const profile = getContinuityProfile(profileInput);
+  const router = profile.router;
+  const base = { profileId: profile.id, routerVersion: router.version };
+  if (features.lowInformation && features.activeTopicId) {
+    return { ...base, intent: "continue_current", targetTopicId: features.activeTopicId, confidence: 1, source: "continuation_phrase" };
+  }
+  if (features.aliasTopicId) {
     return {
-      intent: best.topic.id === active?.id ? "continue_current" : "reopen_old_topic",
-      targetTopicId: best.topic.id,
-      confidence: best.score,
+      ...base,
+      intent: features.aliasTopicId === features.activeTopicId ? "continue_current" : "reopen_old_topic",
+      targetTopicId: features.aliasTopicId,
+      confidence: router.alias_confidence,
+      source: "topic_alias",
+    };
+  }
+  const best = features.candidates?.[0];
+  if (best && Number(best.score) >= Number(router.lexical_match_threshold)) {
+    return {
+      ...base,
+      intent: best.topicId === features.activeTopicId ? "continue_current" : "reopen_old_topic",
+      targetTopicId: best.topicId,
+      confidence: Number(best.score),
       source: "topic_lexical",
     };
   }
-  if (active && /(?:这个|那个|刚才|之前|后来|还是)/.test(String(query || ""))) {
-    return { intent: "ambiguous", targetTopicId: active.id, confidence: 0.55, source: "anaphora" };
+  if (features.anaphora && features.activeTopicId) {
+    return { ...base, intent: "ambiguous", targetTopicId: features.activeTopicId, confidence: router.anaphora_confidence, source: "anaphora" };
   }
-  return { intent: "new_topic", targetTopicId: null, confidence: 0.5, source: "no_topic_match" };
+  return { ...base, intent: "new_topic", targetTopicId: null, confidence: router.new_topic_confidence, source: "no_topic_match" };
+}
+
+function routeContinuity(db, query) {
+  const profiles = profileState(db);
+  const features = extractRouteFeatures(db, query);
+  const active = decideContinuityRoute(features, profiles.active);
+  const shadow = profiles.challenger ? decideContinuityRoute(features, profiles.challenger) : null;
+  return {
+    ...active,
+    features: {
+      activeTopicId: features.activeTopicId,
+      lowInformation: features.lowInformation,
+      aliasTopicId: features.aliasTopicId,
+      anaphora: features.anaphora,
+      candidates: features.candidates.slice(0, 5),
+    },
+    shadow,
+  };
 }
 
 function commitContinuityRoute(db, route) {
   if (!route?.targetTopicId) return false;
   if (route.intent === "continue_current") return true;
-  if (["switch_topic", "reopen_old_topic"].includes(route.intent) && Number(route.confidence) >= 0.45) {
+  const profile = profileState(db).active;
+  if (["switch_topic", "reopen_old_topic"].includes(route.intent)
+      && Number(route.confidence) >= Number(profile.router.route_commit_threshold)) {
     db.transaction(() => activateTopic(db, route.targetTopicId));
     return true;
   }
@@ -417,7 +457,7 @@ function linkTopicEvidence(db, topicId, eventIds) {
 }
 
 function applyTopicUpdate(db, update, context, index, topicRefs, applied) {
-  const updateScore = continuityScoreDetails(update.continuity_signals, "ordinary");
+  const updateScore = continuityScoreDetails(update.continuity_signals, "ordinary", context.continuityProfile);
   const updateContinuity = updateScore.score;
   const updateEvidence = resolveEvidence(db, update, { ...context, continuityValue: updateContinuity, continuityComponents: updateScore.components });
   let createdTopic = false;
@@ -490,7 +530,7 @@ function applyTopicUpdate(db, update, context, index, topicRefs, applied) {
   asArray(update.operations).forEach((operation, operationIndex) => {
     const itemType = itemTypeForOperation(operation);
     const continuityKind = operation.item_type === "correction" ? "correction" : "ordinary";
-    const operationScore = continuityScoreDetails(operation.continuity_signals, continuityKind);
+    const operationScore = continuityScoreDetails(operation.continuity_signals, continuityKind, context.continuityProfile);
     const operationContinuity = operationScore.score;
     const evidence = resolveEvidence(db, operation, { ...context, continuityValue: operationContinuity, continuityComponents: operationScore.components });
     if (!evidence.eventIds.length) {
@@ -691,7 +731,7 @@ function resolveTopicReference(db, value, topicRefs) {
 function applyOpenLoopUpdate(db, update, context, index, topicRefs, applied) {
   const operation = cleanText(update.op || "create", 30);
   const kind = update.loop_type === "commitment" ? "commitment" : "open_loop";
-  const loopScore = continuityScoreDetails(update.continuity_signals, kind);
+  const loopScore = continuityScoreDetails(update.continuity_signals, kind, context.continuityProfile);
   const value = loopScore.score;
   const evidence = resolveEvidence(db, update, { ...context, continuityValue: value, continuityComponents: loopScore.components });
   if (!evidence.eventIds.length) {
@@ -863,7 +903,7 @@ function applyContinuityOutput(db, output, {
   const topicRefs = new Map();
   const topicIds = [];
   const openLoopIds = [];
-  const context = { sourceMessageMap, sourceEventMap, runId, parentRunId, sessionId };
+  const context = { sourceMessageMap, sourceEventMap, runId, parentRunId, sessionId, continuityProfile: profileState(db).active };
   try {
     db.transaction(() => {
       asArray(proposal.topic_updates).forEach((update, index) => {
@@ -993,6 +1033,8 @@ module.exports = {
   continuityOutputContract,
   continuityPromptState,
   continuitySnapshotRefs,
+  decideContinuityRoute,
+  extractRouteFeatures,
   normalizeEpistemicBasis,
   routeContinuity,
 };

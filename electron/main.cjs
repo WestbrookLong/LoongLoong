@@ -17,6 +17,9 @@ const { chatCompletion, testConnection, transcribeAudio } = require("./model.cjs
 const { buildContinuityContext, commitContinuityRoute, routeContinuity } = require("./continuity.cjs");
 const { buildStateContext } = require("./state.cjs");
 const { checkTopicHealth } = require("./topic-governance.cjs");
+const { discoverMergeCandidates, processMergeCandidates } = require("./topic-merge.cjs");
+const { persistEvaluationRun, recordContinuityFeedback, searchProfiles } = require("./continuity-eval.cjs");
+const { promoteContinuityProfile, stageContinuityProfile } = require("./continuity-profiles.cjs");
 
 let mainWindow;
 let db;
@@ -65,6 +68,11 @@ function consolidateDate(dateText) {
     if (hasModelAccess(settings, apiKey)) {
       await processRecommendedTopicRebuilds({ db, settings, apiKey, limit: 1 });
     }
+    const mergeCandidateIds = discoverMergeCandidates(db, { trigger: "daily_consolidation" });
+    if (hasModelAccess(settings, apiKey)) {
+      await processMergeCandidates({ db, settings, apiKey, limit: 1 });
+    }
+    result.topicMergeCandidateIds = mergeCandidateIds;
     return result;
   }, false);
 }
@@ -129,6 +137,9 @@ function dashboard() {
     continuityUpdates: count("continuity_update_runs"),
     topicHealthWarnings: count("topic_health_runs", "WHERE recommendation != 'healthy'"),
     topicRebuilds: count("topic_rebuild_runs", "WHERE status = 'complete'"),
+    topicMergeCandidates: count("topic_merge_candidates", "WHERE status NOT IN ('applied', 'distinct', 'related', 'stale')"),
+    continuityFeedback: count("continuity_feedback"),
+    continuityEvalRuns: count("continuity_eval_runs"),
     databasePath: db.filePath,
   };
 }
@@ -182,18 +193,29 @@ async function handleChat(payload) {
     );
     if (previousRetrieval) {
       let route = {};
+      let outcome = {};
       try { route = JSON.parse(previousRetrieval.route_json || "{}"); } catch {}
+      const previousOutcome = db.get("SELECT outcome_json FROM retrieval_logs WHERE id = $id", { $id: previousRetrieval.id });
+      try { outcome = JSON.parse(previousOutcome?.outcome_json || "{}"); } catch {}
       db.run(
         "UPDATE retrieval_logs SET outcome_json = $outcome WHERE id = $id",
         {
           $id: previousRetrieval.id,
           $outcome: JSON.stringify({
+            ...outcome,
             immediate_user_correction: true,
             possible_wrong_reopen: route.intent === "reopen_old_topic",
             observed_at: isoNow(),
           }),
         },
       );
+      recordContinuityFeedback(db, {
+        retrievalLogId: previousRetrieval.id,
+        feedbackType: "immediate_user_correction",
+        source: "user_correction",
+        strength: "weak",
+        notes: "The user immediately corrected the preceding response; the exact faulty memory layer still requires classification.",
+      });
     }
   }
   const settings = publicSettings();
@@ -212,7 +234,7 @@ async function handleChat(payload) {
   if (intelligentMemoryEnabled && explicitMemory) {
     try {
       const sourceMessageIds = activeMessages(10).map((message) => message.id);
-      await runMemoryExtraction({
+      const extraction = await runMemoryExtraction({
         db,
         settings,
         apiKey,
@@ -220,6 +242,10 @@ async function handleChat(payload) {
         trigger: "explicit",
         sourceMessageIds,
         force: true,
+      });
+      discoverMergeCandidates(db, {
+        topicIds: extraction.continuity?.topicIds || [],
+        trigger: "topic_created_or_updated",
       });
     } catch (error) {
       db.log("warn", "memory", "即时智能记忆提取失败，本轮聊天继续。", {
@@ -258,7 +284,7 @@ async function handleChat(payload) {
      selected_open_loop_ids_json = $loopIds WHERE id = $id`,
     {
       $id: retrieval.id,
-      $scoreVersion: "memory-retrieval-v2+continuity-score-v1",
+      $scoreVersion: `memory-retrieval-v2+${continuityRoute.routerVersion}+continuity-value-v1`,
       $route: JSON.stringify(continuityRoute),
       $topicIds: JSON.stringify(continuity.topicIds),
       $itemIds: JSON.stringify(continuity.topicItemIds),
@@ -327,15 +353,19 @@ async function handleChat(payload) {
       modality,
     });
     if (intelligentMemoryEnabled && !result.offline) {
-      enqueueMemoryJob(() =>
-        runMemoryExtraction({
+      enqueueMemoryJob(async () => {
+        const extraction = await runMemoryExtraction({
           db,
           settings: publicSettings(),
           apiKey: getApiKey(),
           sessionId: sessionRow.id,
           trigger: "batch",
-        }),
-      );
+        });
+        const topicIds = extraction.continuity?.topicIds || [];
+        discoverMergeCandidates(db, { topicIds, trigger: "topic_created_or_updated" });
+        await processMergeCandidates({ db, settings: publicSettings(), apiKey: getApiKey(), limit: 1 });
+        return extraction;
+      });
     }
     return { userMessage, assistantMessage, retrieval, dashboard: dashboard() };
   } catch (error) {
@@ -454,6 +484,36 @@ function records({ type, search = "", limit = 200 } = {}) {
             WHERE r.status LIKE $query OR r.applied_json LIKE $query OR t.title LIKE $query
             ORDER BY r.started_at DESC LIMIT $limit`,
     },
+    topic_merge_candidates: {
+      sql: `SELECT c.*, a.title AS topic_a_title, b.title AS topic_b_title
+            FROM topic_merge_candidates c
+            JOIN topic_threads a ON a.id = c.topic_a_id
+            JOIN topic_threads b ON b.id = c.topic_b_id
+            WHERE c.status LIKE $query OR COALESCE(c.decision, '') LIKE $query
+               OR a.title LIKE $query OR b.title LIKE $query OR COALESCE(c.rationale, '') LIKE $query
+            ORDER BY c.created_at DESC LIMIT $limit`,
+    },
+    continuity_feedback: {
+      sql: `SELECT f.*, r.query AS retrieval_query FROM continuity_feedback f
+            LEFT JOIN retrieval_logs r ON r.id = f.retrieval_log_id
+            WHERE f.feedback_type LIKE $query OR f.source LIKE $query
+               OR COALESCE(f.notes, '') LIKE $query OR COALESCE(r.query, '') LIKE $query
+            ORDER BY f.created_at DESC LIMIT $limit`,
+    },
+    continuity_evals: {
+      sql: `SELECT * FROM continuity_eval_runs
+            WHERE dataset_version LIKE $query OR baseline_profile_id LIKE $query
+               OR recommendation_json LIKE $query
+            ORDER BY created_at DESC LIMIT $limit`,
+    },
+    continuity_profiles: {
+      sql: `SELECT p.*,
+            CASE WHEN s.active_profile_id = p.id THEN 1 ELSE 0 END AS is_active,
+            CASE WHEN s.challenger_profile_id = p.id THEN 1 ELSE 0 END AS is_challenger
+            FROM continuity_profiles p CROSS JOIN continuity_profile_state s
+            WHERE p.id LIKE $query OR p.status LIKE $query OR p.profile_json LIKE $query
+            ORDER BY is_active DESC, is_challenger DESC, p.created_at DESC LIMIT $limit`,
+    },
   };
   const definition = definitions[type];
   if (!definition) throw new Error("未知的数据表类型。");
@@ -488,6 +548,30 @@ function registerIpc() {
   ipcMain.handle("data:records", (_event, payload) => records(payload));
   ipcMain.handle("data:dashboard", () => dashboard());
   ipcMain.handle("memory:consolidate", (_event, date) => consolidateDate(date || localDate()));
+  ipcMain.handle("memory:scan-topics", () => enqueueMemoryJob(async () => {
+    const settings = publicSettings();
+    const apiKey = getApiKey();
+    const candidateIds = discoverMergeCandidates(db, { trigger: "manual" });
+    const adjudications = hasModelAccess(settings, apiKey)
+      ? await processMergeCandidates({ db, settings, apiKey, limit: 1 })
+      : [];
+    return { candidateIds, adjudications };
+  }, false));
+  ipcMain.handle("continuity:evaluate", () => {
+    const fixtureDirectory = path.join(process.cwd(), "tests", "fixtures");
+    const dataset = {
+      route_cases: JSON.parse(fs.readFileSync(path.join(fixtureDirectory, "continuity-route-features.json"), "utf8")),
+      value_cases: JSON.parse(fs.readFileSync(path.join(fixtureDirectory, "continuity-value-cases.json"), "utf8")),
+    };
+    const report = searchProfiles(dataset);
+    const runId = persistEvaluationRun(db, "continuity-eval-v1", report);
+    return { runId, recommendation: report.recommendation };
+  });
+  ipcMain.handle("continuity:profile-action", (_event, payload) => {
+    if (payload?.action === "stage") return stageContinuityProfile(db, payload.profileId);
+    if (payload?.action === "promote") return promoteContinuityProfile(db, payload.profileId);
+    throw new Error("未知的 Profile 操作。");
+  });
   ipcMain.handle("settings:get", () => publicSettings());
   ipcMain.handle("settings:save", (_event, settings) => {
     saveApiKey(settings.apiKey);

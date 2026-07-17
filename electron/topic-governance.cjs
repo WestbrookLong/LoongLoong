@@ -150,7 +150,7 @@ function mergeTopics(db, update, context, evidence) {
     );
     if (retrieval) {
       const outcome = parseJson(retrieval.outcome_json, {});
-      const toolVerified = eventIds.some((eventId) => {
+      const toolVerified = evidence.eventIds.some((eventId) => {
         const event = db.get("SELECT source_kind FROM events WHERE id = $id", { $id: eventId });
         return event?.source_kind === "tool_receipt";
       });
@@ -462,6 +462,7 @@ module.exports = {
   findTopicByAlias,
   governanceOutputContract,
   healthReportContract,
+  mergeTopics,
   normalizeAlias,
   resolveCanonicalTopic,
   synchronizeTopicMaterializedSets,

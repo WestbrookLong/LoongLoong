@@ -55,6 +55,9 @@ export interface Dashboard {
   continuityUpdates: number;
   topicHealthWarnings: number;
   topicRebuilds: number;
+  topicMergeCandidates: number;
+  continuityFeedback: number;
+  continuityEvalRuns: number;
   databasePath: string;
 }
 
@@ -90,6 +93,9 @@ export interface PetApi {
   getRecords(payload: { type: string; search?: string; limit?: number }): Promise<Record<string, unknown>[]>;
   getDashboard(): Promise<Dashboard>;
   consolidate(date?: string): Promise<Record<string, unknown>>;
+  scanTopics(): Promise<{ candidateIds: string[]; adjudications: Record<string, unknown>[] }>;
+  evaluateContinuity(): Promise<{ runId: string; recommendation: { action: string; safe: boolean } }>;
+  continuityProfileAction(payload: { action: "stage" | "promote"; profileId: string }): Promise<{ applied: boolean; reason?: string }>;
   getSettings(): Promise<Settings>;
   saveSettings(settings: Partial<Settings>): Promise<Settings>;
   testConnection(settings: Partial<Settings>): Promise<{ ok: boolean }>;

@@ -239,6 +239,7 @@ input:checked + .toggle::after { transform: translateX(16px); }
 }
 .panel-header h1, .inspector-header h1, .settings-header h1 { margin: 0; font-size: 18px; line-height: 1.25; }
 .panel-header > div, .inspector-header > div { display: flex; align-items: baseline; gap: 10px; }
+.inspector-header .inspector-actions { align-items: center; }
 .panel-header span, .settings-header span { color: var(--muted); font-size: 12px; }
 
 .deep-toggle, .secondary-button, .command-button {

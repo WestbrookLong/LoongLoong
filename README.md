@@ -2,7 +2,7 @@
 
 Local-first AI pet desktop prototype with text/voice chat, inspectable SQLite memory, event capture, retrieval, and daily consolidation.
 
-## Memory v0.4
+## Memory v0.5
 
 Detailed architecture, schema, algorithms, and implementation notes: [Memory_Design.md](./Memory_Design.md).
 
@@ -24,6 +24,8 @@ Pet keeps raw messages immutable and builds derived memory in separate layers:
 - retrieval logs record score versions, routes, and the exact Topic, Item, and Open Loop IDs injected into a turn
 - Topic Health checks treat age and revision count as signals only; evidence-backed rebuilds repair current materialized state without recreating history
 - Topic aliases and merges resolve through a canonical Topic while preserving old IDs and evidence
+- Topic merge candidates are discovered locally, semantically adjudicated by an LLM, and applied only through evidence- and version-checked reducers
+- continuity value and Topic routing use separate versioned Profiles with offline evaluation, Shadow comparison, and explicit manual promotion
 
 The development inspector exposes context snapshots, extraction runs, compaction runs, claims, evidence, and claim relations. Context and memory model settings are configurable independently from the chat model.
 
@@ -43,4 +45,5 @@ Development data is stored in `.pet-data/pet.db`. The directory is ignored by Gi
 ```powershell
 npm test
 npm run build
+npm run eval:continuity -- --search
 ```
