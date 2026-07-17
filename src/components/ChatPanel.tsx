@@ -1,10 +1,16 @@
 import { ArrowUp, Mic, Search } from "lucide-react";
-import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
-import type { Message } from "../types";
+import { FormEvent, KeyboardEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
+import type { Message, StreamingResponse } from "../types";
+import { ReasoningPanel } from "./ReasoningPanel";
+
+const MarkdownMessage = lazy(() => import("./MarkdownMessage").then((module) => ({
+  default: module.MarkdownMessage,
+})));
 
 interface Props {
   messages: Message[];
   busy: boolean;
+  streamingResponse: StreamingResponse | null;
   onSend: (text: string, deep?: boolean) => Promise<void>;
   onMic: () => void;
 }
@@ -13,7 +19,19 @@ function formatTime(value: string) {
   return new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
-export function ChatPanel({ messages, busy, onSend, onMic }: Props) {
+function messageReasoning(message: Message) {
+  try {
+    const metadata = JSON.parse(message.metadata_json || "{}");
+    return {
+      content: String(metadata.reasoningContent || ""),
+      durationMs: Number(metadata.reasoningDurationMs || 0),
+    };
+  } catch {
+    return { content: "", durationMs: 0 };
+  }
+}
+
+export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic }: Props) {
   const [text, setText] = useState("");
   const [deep, setDeep] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -27,12 +45,12 @@ export function ChatPanel({ messages, busy, onSend, onMic }: Props) {
     const frame = window.requestAnimationFrame(() => {
       list.scrollTo({
         top: list.scrollHeight,
-        behavior: initializedRef.current ? "smooth" : "auto",
+        behavior: initializedRef.current && !streamingResponse ? "smooth" : "auto",
       });
       initializedRef.current = true;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages.length, busy]);
+  }, [messages.length, busy, streamingResponse?.reasoningContent.length, streamingResponse?.content.length]);
 
   const updateScrollPosition = () => {
     const list = listRef.current;
@@ -75,17 +93,43 @@ export function ChatPanel({ messages, busy, onSend, onMic }: Props) {
       </header>
 
       <div ref={listRef} className="message-list" onScroll={updateScrollPosition}>
-        {messages.map((message) => (
-          <article key={message.id} className={`message ${message.role}`}>
-            <div className="message-meta">
-              <span>{message.role === "user" ? "你" : "Pet"}</span>
-              <time>{formatTime(message.created_at)}</time>
-              {message.modality === "voice" && <Mic size={13} />}
-            </div>
-            <p>{message.content}</p>
+        {messages.map((message) => {
+          const reasoning = message.role === "assistant" ? messageReasoning(message) : null;
+          return (
+            <article key={message.id} className={`message ${message.role}`}>
+              <div className="message-meta">
+                <span>{message.role === "user" ? "你" : "Pet"}</span>
+                <time>{formatTime(message.created_at)}</time>
+                {message.modality === "voice" && <Mic size={13} />}
+              </div>
+              {reasoning?.content && <ReasoningPanel content={reasoning.content} durationMs={reasoning.durationMs} />}
+              {message.role === "assistant"
+                ? (
+                  <Suspense fallback={<p>{message.content}</p>}>
+                    <MarkdownMessage content={message.content} />
+                  </Suspense>
+                )
+                : <p>{message.content}</p>}
+            </article>
+          );
+        })}
+        {busy && streamingResponse && (streamingResponse.reasoningContent || streamingResponse.content) && (
+          <article className="message assistant streaming-message">
+            <div className="message-meta"><span>Pet</span><time>正在回答</time></div>
+            <ReasoningPanel
+              content={streamingResponse.reasoningContent}
+              active
+              answerStarted={Boolean(streamingResponse.content)}
+              startedAt={streamingResponse.startedAt}
+            />
+            {streamingResponse.content && (
+              <Suspense fallback={<p>{streamingResponse.content}</p>}>
+                <MarkdownMessage content={streamingResponse.content} />
+              </Suspense>
+            )}
           </article>
-        ))}
-        {busy && (
+        )}
+        {busy && !streamingResponse?.reasoningContent && !streamingResponse?.content && (
           <div className="thinking-row" aria-label="正在思考">
             <span /><span /><span />
           </div>

@@ -1,5 +1,6 @@
-import { Check, KeyRound, PlugZap, Save } from "lucide-react";
+import { Check, KeyRound, Moon, PlugZap, Save } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
+import { applyThemeMode, normalizeThemeMode } from "../theme";
 import type { Settings } from "../types";
 
 interface Props {
@@ -14,10 +15,12 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
   const [tested, setTested] = useState(false);
 
   useEffect(() => setForm({ ...settings, apiKey: "" }), [settings]);
+  useEffect(() => () => applyThemeMode(settings.themeMode), [settings.themeMode]);
 
   const update = (key: keyof Settings, value: string | boolean) => {
     setTested(false);
     setForm((current) => ({ ...current, [key]: value }));
+    if (key === "themeMode") applyThemeMode(normalizeThemeMode(value));
   };
 
   const save = async (event: FormEvent) => {
@@ -52,6 +55,22 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
         <span>{settings.hasApiKey ? "模型密钥已安全保存" : "尚未配置模型密钥"}</span>
       </header>
       <form className="settings-form" onSubmit={save}>
+        <section>
+          <h2>外观</h2>
+          <label>
+            <span><Moon size={15} />主题</span>
+            <select
+              value={form.themeMode}
+              onChange={(event) => update("themeMode", event.target.value)}
+            >
+              <option value="system">跟随系统</option>
+              <option value="light">浅色</option>
+              <option value="dark">深色</option>
+            </select>
+          </label>
+          <p className="setting-hint">切换后立即预览，保存设置后会在下次启动时继续使用。</p>
+        </section>
+
         <section>
           <h2>身份</h2>
           <label>

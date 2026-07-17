@@ -686,6 +686,7 @@ class PetDatabase {
     const defaultBaseUrl = legacyBaseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1";
     const defaults = {
       petName: "小步",
+      themeMode: "system",
       chatBaseUrl: defaultBaseUrl,
       transcriptionBaseUrl: defaultBaseUrl,
       chatModel: "qwen3.7-max",

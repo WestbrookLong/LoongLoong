@@ -64,33 +64,121 @@ async function structuredCompletion({ settings, apiKey, model, messages, tempera
   };
 }
 
-async function chatCompletion({ settings, apiKey, messages }) {
+function chatDeltaText(value) {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value.map((item) => typeof item === "string" ? item : String(item?.text || item?.content || "")).join("");
+}
+
+async function readChatStream(response, onDelta) {
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("text/event-stream")) {
+    const data = await response.json();
+    const message = data?.choices?.[0]?.message || {};
+    const reasoningContent = chatDeltaText(message.reasoning_content ?? message.reasoning);
+    const content = chatDeltaText(message.content);
+    if (reasoningContent) onDelta({ reasoningContentDelta: reasoningContent, contentDelta: "" });
+    if (content) onDelta({ reasoningContentDelta: "", contentDelta: content });
+    return { content, reasoningContent, reasoningDurationMs: 0 };
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("模型流式响应不可读取。");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let reasoningContent = "";
+  const startedAt = Date.now();
+  let answerStartedAt = 0;
+
+  const consumeEvent = (block) => {
+    const payload = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n")
+      .trim();
+    if (!payload || payload === "[DONE]") return;
+    const data = JSON.parse(payload);
+    const delta = data?.choices?.[0]?.delta || {};
+    const reasoningContentDelta = chatDeltaText(delta.reasoning_content ?? delta.reasoning);
+    const contentDelta = chatDeltaText(delta.content);
+    if (!reasoningContentDelta && !contentDelta) return;
+    reasoningContent += reasoningContentDelta;
+    if (contentDelta && !answerStartedAt) answerStartedAt = Date.now();
+    content += contentDelta;
+    onDelta({ reasoningContentDelta, contentDelta });
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() || "";
+    for (const block of blocks) consumeEvent(block);
+    if (done) break;
+  }
+  if (buffer.trim()) consumeEvent(buffer);
+  return {
+    content,
+    reasoningContent,
+    reasoningDurationMs: reasoningContent ? (answerStartedAt || Date.now()) - startedAt : 0,
+  };
+}
+
+async function chatCompletion({ settings, apiKey, messages, onDelta = null }) {
   const baseUrl = normalizeBaseUrl(settings.chatBaseUrl || settings.baseUrl);
   const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl);
   if (!apiKey && !isLocal) {
-    return {
+    const result = {
       offline: true,
       content: "我已经把这段话记录下来了。现在还没有配置模型 API；在设置中填入接口密钥后，我就能真正和你继续聊。",
+      reasoningContent: "",
+      reasoningDurationMs: 0,
     };
+    onDelta?.({ reasoningContentDelta: "", contentDelta: result.content });
+    return result;
   }
 
-  const response = await fetch(endpoint(baseUrl, "/chat/completions"), {
+  const payload = {
+    model: settings.chatModel || "gpt-4o-mini",
+    messages,
+    temperature: Number(settings.temperature || 0.7),
+    stream: Boolean(onDelta),
+  };
+  if (onDelta) {
+    payload.stream_options = { include_usage: true };
+    payload.enable_thinking = true;
+  }
+  const request = () => fetch(endpoint(baseUrl, "/chat/completions"), {
     method: "POST",
     headers: requestHeaders(apiKey),
-    body: JSON.stringify({
-      model: settings.chatModel || "gpt-4o-mini",
-      messages,
-      temperature: Number(settings.temperature || 0.7),
-    }),
+    body: JSON.stringify(payload),
   });
+  let response = await request();
+  if (!response.ok && response.status === 400 && payload.enable_thinking) {
+    delete payload.enable_thinking;
+    response = await request();
+  }
   if (!response.ok) {
     const details = await response.text();
     throw new Error(`模型请求失败 (${response.status}): ${details.slice(0, 500)}`);
   }
+  if (onDelta) {
+    const streamed = await readChatStream(response, onDelta);
+    if (!streamed.content) throw new Error("模型返回了空响应。");
+    return { offline: false, ...streamed };
+  }
   const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
+  const message = data?.choices?.[0]?.message || {};
+  const content = chatDeltaText(message.content);
   if (!content) throw new Error("模型返回了空响应。");
-  return { offline: false, content: String(content) };
+  return {
+    offline: false,
+    content,
+    reasoningContent: chatDeltaText(message.reasoning_content ?? message.reasoning),
+    reasoningDurationMs: 0,
+  };
 }
 
 async function transcribeAudio({ settings, apiKey, bytes, mimeType }) {

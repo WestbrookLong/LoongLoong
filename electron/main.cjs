@@ -1,7 +1,7 @@
 const path = require("node:path");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
-const { app, BrowserWindow, ipcMain, safeStorage, session } = require("electron");
+const { app, BrowserWindow, ipcMain, nativeTheme, safeStorage, session, shell } = require("electron");
 const { PetDatabase, isoNow, localDate } = require("./database.cjs");
 const { captureUserTurn, retrieveMemory } = require("./memory.cjs");
 const {
@@ -120,6 +120,11 @@ function publicSettings() {
   };
 }
 
+function applyNativeTheme(themeMode = "system") {
+  nativeTheme.themeSource = ["light", "dark", "system"].includes(themeMode) ? themeMode : "system";
+  mainWindow?.setBackgroundColor(nativeTheme.shouldUseDarkColors ? "#111210" : "#f4f4f1");
+}
+
 function dashboard() {
   const count = (table, where = "") => Number(db.get(`SELECT COUNT(*) AS count FROM ${table} ${where}`).count);
   return {
@@ -180,7 +185,7 @@ function inferActivity(text) {
   return null;
 }
 
-async function handleChat(payload) {
+async function handleChat(payload, onDelta = null) {
   const text = String(payload?.text || "").trim();
   if (!text) throw new Error("消息不能为空。");
   const modality = payload?.modality === "voice" ? "voice" : "text";
@@ -332,6 +337,7 @@ async function handleChat(payload) {
       settings,
       apiKey: getApiKey(),
       messages: [{ role: "system", content: system }, ...history],
+      onDelta,
     });
     const assistantMessage = db.addMessage({
       sessionId: sessionRow.id,
@@ -345,6 +351,8 @@ async function handleChat(payload) {
         continuityRoute: continuity.route,
         model: settings.chatModel,
         offline: result.offline,
+        reasoningContent: result.reasoningContent || "",
+        reasoningDurationMs: Number(result.reasoningDurationMs || 0),
       },
     });
     db.log("info", "chat", result.offline ? "离线模式回复完成。" : "模型回复完成。", {
@@ -527,8 +535,19 @@ function registerIpc() {
     messages: activeMessages(),
     dashboard: dashboard(),
   }));
-  ipcMain.handle("chat:send", (_event, payload) => handleChat(payload));
+  ipcMain.handle("chat:send", (event, payload) => {
+    const requestId = String(payload?.requestId || crypto.randomUUID());
+    const onDelta = (delta) => {
+      if (!event.sender.isDestroyed()) event.sender.send("chat:stream", { requestId, ...delta });
+    };
+    return handleChat(payload, onDelta);
+  });
   ipcMain.handle("chat:new", () => createSession());
+  ipcMain.handle("app:open-external", async (_event, value) => {
+    const url = new URL(String(value || ""));
+    if (!["http:", "https:", "mailto:"].includes(url.protocol)) throw new Error("不支持的链接协议。");
+    await shell.openExternal(url.toString());
+  });
   ipcMain.handle("voice:transcribe", async (_event, payload) => {
     try {
       const bytes = Buffer.from(payload.bytes);
@@ -576,6 +595,7 @@ function registerIpc() {
   ipcMain.handle("settings:save", (_event, settings) => {
     saveApiKey(settings.apiKey);
     const saved = db.saveSettings(settings);
+    applyNativeTheme(saved.themeMode);
     db.log("info", "settings", "设置已更新。", { keys: Object.keys(settings).filter((key) => key !== "apiKey") });
     return { ...saved, autoSpeak: saved.autoSpeak === "true", hasApiKey: Boolean(getApiKey()) };
   });
@@ -607,12 +627,13 @@ function startDailyScheduler() {
 
 function createWindow() {
   const preload = path.join(__dirname, "preload.cjs");
+  applyNativeTheme(publicSettings().themeMode);
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
     minWidth: 940,
     minHeight: 680,
-    backgroundColor: "#f4f4f1",
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#111210" : "#f4f4f1",
     title: "Pet",
     icon: path.join(process.cwd(), "src", "assets", "pet-icon.png"),
     webPreferences: {

@@ -1,4 +1,5 @@
 export type Route = "chat" | "history" | "memory" | "logs" | "settings";
+export type ThemeMode = "light" | "dark" | "system";
 
 export interface Message {
   id: string;
@@ -22,6 +23,7 @@ export interface Session {
 
 export interface Settings {
   petName: string;
+  themeMode: ThemeMode;
   chatBaseUrl: string;
   transcriptionBaseUrl: string;
   chatModel: string;
@@ -80,6 +82,19 @@ export interface ChatResult {
   dashboard: Dashboard;
 }
 
+export interface ChatStreamEvent {
+  requestId: string;
+  reasoningContentDelta: string;
+  contentDelta: string;
+}
+
+export interface StreamingResponse {
+  requestId: string;
+  reasoningContent: string;
+  content: string;
+  startedAt: number;
+}
+
 export interface VoicePayload {
   bytes: ArrayBuffer;
   mimeType: string;
@@ -87,7 +102,8 @@ export interface VoicePayload {
 
 export interface PetApi {
   bootstrap(): Promise<Bootstrap>;
-  sendMessage(payload: { text: string; modality: "text" | "voice"; deep?: boolean }): Promise<ChatResult>;
+  sendMessage(payload: { requestId: string; text: string; modality: "text" | "voice"; deep?: boolean }): Promise<ChatResult>;
+  onChatStream(callback: (event: ChatStreamEvent) => void): () => void;
   newChat(): Promise<{ session: Session; messages: Message[] }>;
   transcribe(payload: VoicePayload): Promise<{ text: string }>;
   getRecords(payload: { type: string; search?: string; limit?: number }): Promise<Record<string, unknown>[]>;
@@ -96,6 +112,7 @@ export interface PetApi {
   scanTopics(): Promise<{ candidateIds: string[]; adjudications: Record<string, unknown>[] }>;
   evaluateContinuity(): Promise<{ runId: string; recommendation: { action: string; safe: boolean } }>;
   continuityProfileAction(payload: { action: "stage" | "promote"; profileId: string }): Promise<{ applied: boolean; reason?: string }>;
+  openExternal(url: string): Promise<void>;
   getSettings(): Promise<Settings>;
   saveSettings(settings: Partial<Settings>): Promise<Settings>;
   testConnection(settings: Partial<Settings>): Promise<{ ok: boolean }>;

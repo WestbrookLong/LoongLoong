@@ -6,7 +6,8 @@ import { Navigation } from "./components/Navigation";
 import { PetStage } from "./components/PetStage";
 import { SettingsView } from "./components/SettingsView";
 import { useVoiceConversation } from "./hooks/useVoiceConversation";
-import type { Bootstrap, Dashboard, Message, Route, Settings } from "./types";
+import { watchThemeMode } from "./theme";
+import type { Bootstrap, Dashboard, Message, Route, Settings, StreamingResponse } from "./types";
 
 interface Toast {
   id: number;
@@ -21,6 +22,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [busy, setBusy] = useState(false);
+  const [streamingResponse, setStreamingResponse] = useState<StreamingResponse | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
 
   const notify = useCallback((message: string, error = false) => {
@@ -40,8 +42,24 @@ export default function App() {
       .catch((error) => notify(error instanceof Error ? error.message : String(error), true));
   }, [notify]);
 
+  useEffect(() => window.pet.onChatStream((event) => {
+    setStreamingResponse((current) => current?.requestId === event.requestId
+      ? {
+        ...current,
+        reasoningContent: current.reasoningContent + event.reasoningContentDelta,
+        content: current.content + event.contentDelta,
+      }
+      : current);
+  }), []);
+
+  useEffect(() => {
+    if (!settings) return undefined;
+    return watchThemeMode(settings.themeMode);
+  }, [settings]);
+
   const send = useCallback(async (text: string, modality: "text" | "voice", deep = false) => {
     if (busy) return undefined;
+    const requestId = window.crypto.randomUUID();
     const tempId = `temp-${Date.now()}`;
     const optimistic: Message = {
       id: tempId,
@@ -54,18 +72,21 @@ export default function App() {
       created_at: new Date().toISOString(),
     };
     setMessages((current) => [...current, optimistic]);
+    setStreamingResponse({ requestId, reasoningContent: "", content: "", startedAt: Date.now() });
     setBusy(true);
     try {
-      const result = await window.pet.sendMessage({ text, modality, deep });
+      const result = await window.pet.sendMessage({ requestId, text, modality, deep });
       setMessages((current) => [
         ...current.filter((message) => message.id !== tempId),
         result.userMessage,
         result.assistantMessage,
       ]);
       setDashboard(result.dashboard);
+      setStreamingResponse(null);
       return result.assistantMessage.content;
     } catch (error) {
       setMessages((current) => current.filter((message) => message.id !== tempId));
+      setStreamingResponse(null);
       notify(error instanceof Error ? error.message : String(error), true);
       return undefined;
     } finally {
@@ -114,6 +135,7 @@ export default function App() {
           <ChatPanel
             messages={messages}
             busy={busy}
+            streamingResponse={streamingResponse}
             onSend={(text, deep) => send(text, "text", deep).then(() => undefined)}
             onMic={() => void voice.toggleManual()}
           />
@@ -147,4 +169,3 @@ export default function App() {
     </div>
   );
 }
-
