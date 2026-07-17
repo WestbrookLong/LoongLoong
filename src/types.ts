@@ -22,7 +22,8 @@ export interface Session {
 
 export interface Settings {
   petName: string;
-  baseUrl: string;
+  chatBaseUrl: string;
+  transcriptionBaseUrl: string;
   chatModel: string;
   transcriptionModel: string;
   temperature: string;
@@ -78,4 +79,3 @@ export interface PetApi {
   saveSettings(settings: Partial<Settings>): Promise<Settings>;
   testConnection(settings: Partial<Settings>): Promise<{ ok: boolean }>;
 }
-

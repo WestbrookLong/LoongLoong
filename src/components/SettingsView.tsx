@@ -66,10 +66,16 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
 
         <section>
           <h2>模型</h2>
-          <label>
-            <span>API 地址</span>
-            <input value={form.baseUrl} onChange={(event) => update("baseUrl", event.target.value)} />
-          </label>
+          <div className="form-grid">
+            <label>
+              <span>文本模型地址</span>
+              <input value={form.chatBaseUrl} onChange={(event) => update("chatBaseUrl", event.target.value)} />
+            </label>
+            <label>
+              <span>语音转写地址</span>
+              <input value={form.transcriptionBaseUrl} onChange={(event) => update("transcriptionBaseUrl", event.target.value)} />
+            </label>
+          </div>
           <div className="form-grid">
             <label>
               <span>聊天模型</span>
@@ -116,4 +122,3 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
     </main>
   );
 }
-

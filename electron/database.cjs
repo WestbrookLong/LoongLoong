@@ -185,11 +185,14 @@ class PetDatabase {
   }
 
   seed() {
+    const legacyBaseUrl = this.get("SELECT value FROM app_settings WHERE key = 'baseUrl'")?.value;
+    const defaultBaseUrl = legacyBaseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1";
     const defaults = {
       petName: "小步",
-      baseUrl: "https://api.openai.com/v1",
-      chatModel: "gpt-4o-mini",
-      transcriptionModel: "gpt-4o-mini-transcribe",
+      chatBaseUrl: defaultBaseUrl,
+      transcriptionBaseUrl: defaultBaseUrl,
+      chatModel: "qwen3.7-max",
+      transcriptionModel: "qwen3-asr-flash",
       temperature: "0.7",
       autoSpeak: "true",
       systemPrompt: "你是一个长期陪伴用户的 AI 宠物。你温暖、敏锐、诚实，会自然地使用记忆，但不会假装记得不存在的事情。",
@@ -359,4 +362,3 @@ class PetDatabase {
 }
 
 module.exports = { PetDatabase, isoNow, localDate };
-

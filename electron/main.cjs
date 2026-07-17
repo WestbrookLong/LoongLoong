@@ -45,8 +45,9 @@ function saveApiKey(apiKey) {
 
 function publicSettings() {
   const settings = db.getSettings();
+  const { baseUrl: _legacyBaseUrl, ...currentSettings } = settings;
   return {
-    ...settings,
+    ...currentSettings,
     autoSpeak: settings.autoSpeak === "true",
     hasApiKey: Boolean(getApiKey()),
   };
@@ -203,15 +204,20 @@ function registerIpc() {
   ipcMain.handle("chat:send", (_event, payload) => handleChat(payload));
   ipcMain.handle("chat:new", () => createSession());
   ipcMain.handle("voice:transcribe", async (_event, payload) => {
-    const bytes = Buffer.from(payload.bytes);
-    const text = await transcribeAudio({
-      settings: publicSettings(),
-      apiKey: getApiKey(),
-      bytes,
-      mimeType: payload.mimeType,
-    });
-    db.log("info", "voice", "语音转写完成。", { characters: text.length });
-    return { text };
+    try {
+      const bytes = Buffer.from(payload.bytes);
+      const text = await transcribeAudio({
+        settings: publicSettings(),
+        apiKey: getApiKey(),
+        bytes,
+        mimeType: payload.mimeType,
+      });
+      db.log("info", "voice", "语音转写完成。", { characters: text.length });
+      return { text };
+    } catch (error) {
+      db.log("error", "voice", "语音转写失败。", { error: String(error.message || error) });
+      throw error;
+    }
   });
   ipcMain.handle("data:records", (_event, payload) => records(payload));
   ipcMain.handle("data:dashboard", () => dashboard());

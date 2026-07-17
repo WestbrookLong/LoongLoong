@@ -2,6 +2,11 @@ function normalizeBaseUrl(baseUrl) {
   return String(baseUrl || "https://api.openai.com/v1").replace(/\/+$/, "");
 }
 
+function endpoint(baseUrl, path) {
+  const normalized = normalizeBaseUrl(baseUrl);
+  return normalized.endsWith(path) ? normalized : `${normalized}${path}`;
+}
+
 function requestHeaders(apiKey) {
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
@@ -9,7 +14,7 @@ function requestHeaders(apiKey) {
 }
 
 async function chatCompletion({ settings, apiKey, messages }) {
-  const baseUrl = normalizeBaseUrl(settings.baseUrl);
+  const baseUrl = normalizeBaseUrl(settings.chatBaseUrl || settings.baseUrl);
   const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl);
   if (!apiKey && !isLocal) {
     return {
@@ -18,7 +23,7 @@ async function chatCompletion({ settings, apiKey, messages }) {
     };
   }
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const response = await fetch(endpoint(baseUrl, "/chat/completions"), {
     method: "POST",
     headers: requestHeaders(apiKey),
     body: JSON.stringify({
@@ -38,18 +43,49 @@ async function chatCompletion({ settings, apiKey, messages }) {
 }
 
 async function transcribeAudio({ settings, apiKey, bytes, mimeType }) {
-  const baseUrl = normalizeBaseUrl(settings.baseUrl);
+  const baseUrl = normalizeBaseUrl(settings.transcriptionBaseUrl || settings.baseUrl);
   const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl);
   if (!apiKey && !isLocal) throw new Error("请先在设置中配置模型 API 密钥。");
+
+  const model = settings.transcriptionModel || "qwen3-asr-flash";
+  if (/^qwen\d*-asr-/i.test(model)) {
+    const audioType = mimeType || "audio/webm";
+    const dataUri = `data:${audioType};base64,${Buffer.from(bytes).toString("base64")}`;
+    const response = await fetch(endpoint(baseUrl, "/chat/completions"), {
+      method: "POST",
+      headers: requestHeaders(apiKey),
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "input_audio", input_audio: { data: dataUri } }],
+          },
+        ],
+        stream: false,
+      }),
+    });
+    if (!response.ok) {
+      const details = await response.text();
+      throw new Error(`语音转写失败 (${response.status}): ${details.slice(0, 500)}`);
+    }
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+    const text = Array.isArray(content)
+      ? content.map((item) => item?.text || item?.content || "").join("")
+      : String(content || "");
+    if (!text.trim()) throw new Error("语音转写服务返回了空结果。");
+    return text.trim();
+  }
 
   const extension = mimeType?.includes("ogg") ? "ogg" : mimeType?.includes("mp4") ? "m4a" : "webm";
   const form = new FormData();
   form.append("file", new Blob([bytes], { type: mimeType || "audio/webm" }), `voice.${extension}`);
-  form.append("model", settings.transcriptionModel || "gpt-4o-mini-transcribe");
+  form.append("model", model);
 
   const headers = {};
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-  const response = await fetch(`${baseUrl}/audio/transcriptions`, {
+  const response = await fetch(endpoint(baseUrl, "/audio/transcriptions"), {
     method: "POST",
     headers,
     body: form,
@@ -63,7 +99,7 @@ async function transcribeAudio({ settings, apiKey, bytes, mimeType }) {
 }
 
 async function testConnection({ settings, apiKey }) {
-  const baseUrl = normalizeBaseUrl(settings.baseUrl);
+  const baseUrl = normalizeBaseUrl(settings.chatBaseUrl || settings.baseUrl);
   const headers = {};
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   const response = await fetch(`${baseUrl}/models`, { headers });
@@ -71,5 +107,4 @@ async function testConnection({ settings, apiKey }) {
   return { ok: true };
 }
 
-module.exports = { chatCompletion, testConnection, transcribeAudio };
-
+module.exports = { chatCompletion, endpoint, testConnection, transcribeAudio };
