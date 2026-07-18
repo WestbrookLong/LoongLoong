@@ -29,6 +29,31 @@ Pet keeps raw messages immutable and builds derived memory in separate layers:
 
 The development inspector exposes context snapshots, extraction runs, compaction runs, claims, evidence, and claim relations. Context and memory model settings are configurable independently from the chat model.
 
+## Read-only Agent
+
+Pet can run a bounded Agent loop through an isolated Python sidecar. The first phase exposes five read-only tools:
+
+- `web_search` and `web_read`
+- `filesystem_list`, `filesystem_read`, and `filesystem_search`
+
+Install the sidecar dependencies before starting Pet:
+
+```powershell
+python -m pip install -r python/requirements-agent.txt
+```
+
+The browser runtime prefers the locally installed Microsoft Edge. If Edge is unavailable, install Playwright Chromium with `python -m playwright install chromium`.
+
+In Settings, enable **Read-only Agent** and choose the single workspace root it may inspect. Agent activity is streamed into the conversation, while task/run/tool receipts are available in the Logs inspector. File writes, shell commands, private-network browsing, downloads, credential files, links/reparse points, `.pet-data`, `.git`, and `node_modules` are not available in this phase.
+
+Example requests:
+
+```text
+List this project and explain its main modules.
+Search for every model API call in the workspace.
+Search the web for Playwright's current Python documentation, read the official page, and summarize it with sources.
+```
+
 ## Run
 
 ```powershell
@@ -44,6 +69,7 @@ Development data is stored in `.pet-data/pet.db`. The directory is ignored by Gi
 
 ```powershell
 npm test
+npm run test:agent
 npm run build
 npm run eval:continuity -- --search
 ```

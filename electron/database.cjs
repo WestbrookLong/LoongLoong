@@ -636,12 +636,71 @@ class PetDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS agent_tasks (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        user_message_id TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        status TEXT NOT NULL,
+        summary_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        FOREIGN KEY (session_id) REFERENCES sessions(id),
+        FOREIGN KEY (user_message_id) REFERENCES messages(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_runs (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        step_count INTEGER NOT NULL DEFAULT 0,
+        stop_reason TEXT,
+        limits_json TEXT NOT NULL DEFAULT '{}',
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        error TEXT,
+        FOREIGN KEY (task_id) REFERENCES agent_tasks(id),
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_steps (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        step_no INTEGER NOT NULL,
+        finish_reason TEXT,
+        model_output_json TEXT NOT NULL DEFAULT '{}',
+        usage_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES agent_runs(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS tool_executions (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        step_no INTEGER NOT NULL,
+        tool_call_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        arguments_json TEXT NOT NULL DEFAULT '{}',
+        result_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        truncated INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES agent_runs(id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_session_time ON messages(session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_events_day_time ON events(journal_day_id, occurred_at);
       CREATE INDEX IF NOT EXISTS idx_events_activity ON events(activity_id);
       CREATE INDEX IF NOT EXISTS idx_claims_status_scope ON memory_claims(status, scope_type, scope_id);
       CREATE INDEX IF NOT EXISTS idx_claims_key ON memory_claims(claim_key);
       CREATE INDEX IF NOT EXISTS idx_logs_time ON logs(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_agent_tasks_session ON agent_tasks(session_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_agent_steps_run ON agent_steps(run_id, step_no);
+      CREATE INDEX IF NOT EXISTS idx_tool_executions_run ON tool_executions(run_id, step_no);
       CREATE INDEX IF NOT EXISTS idx_context_snapshots_session ON context_snapshots(session_id, source_end_rowid DESC);
       CREATE INDEX IF NOT EXISTS idx_extraction_runs_session ON memory_extraction_runs(session_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_event_sources_message ON event_sources(message_id);
@@ -855,6 +914,14 @@ class PetDatabase {
       "UPDATE topic_merge_candidates SET status = 'interrupted', error = $error, updated_at = $now WHERE status = 'adjudicating'",
       { $error: error, $now: now },
     );
+    this.db.run(
+      "UPDATE agent_runs SET status = 'interrupted', error = $error, completed_at = $now WHERE status = 'running'",
+      { $error: error, $now: now },
+    );
+    this.db.run(
+      "UPDATE agent_tasks SET status = 'interrupted', completed_at = $now, updated_at = $now WHERE status = 'running'",
+      { $now: now },
+    );
   }
 
   seed() {
@@ -876,6 +943,10 @@ class PetDatabase {
       memoryBatchSize: "6",
       temperature: "0.7",
       autoSpeak: "true",
+      agentEnabled: "true",
+      agentWorkspaceRoot: process.cwd(),
+      agentMaxSteps: "8",
+      agentTimeoutSeconds: "300",
       systemPrompt: "你是一个长期陪伴用户的 AI 宠物。你温暖、敏锐、诚实，会自然地使用记忆，但不会假装记得不存在的事情。",
     };
     const stamp = isoNow();
@@ -995,7 +1066,7 @@ class PetDatabase {
     const stamp = isoNow();
     this.transaction(() => {
       for (const [key, value] of Object.entries(settings)) {
-        if (key === "apiKey" || value === undefined) continue;
+        if (key === "apiKey" || key === "hasApiKey" || value === undefined) continue;
         this.db.run(
           `INSERT INTO app_settings (key, value, updated_at) VALUES ($key, $value, $updatedAt)
            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,

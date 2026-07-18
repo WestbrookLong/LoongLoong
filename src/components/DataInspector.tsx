@@ -36,6 +36,9 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
   ],
   logs: [
     { id: "logs", label: "运行日志" },
+    { id: "agent_tasks", label: "Agent 任务" },
+    { id: "agent_runs", label: "Agent 运行" },
+    { id: "tool_executions", label: "工具调用" },
     { id: "compactions", label: "压缩运行" },
     { id: "continuity_runs", label: "连续性更新" },
     { id: "topic_health", label: "主题健康" },
@@ -149,6 +152,25 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "level", label: "级别", width: "80px" },
     { key: "category", label: "模块", width: "100px" },
     { key: "message", label: "消息" },
+    { key: "created_at", label: "时间", width: "150px" },
+  ],
+  agent_tasks: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "objective", label: "任务" },
+    { key: "created_at", label: "创建时间", width: "150px" },
+  ],
+  agent_runs: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "objective", label: "任务" },
+    { key: "step_count", label: "步骤", width: "70px" },
+    { key: "stop_reason", label: "停止原因", width: "110px" },
+    { key: "started_at", label: "开始时间", width: "150px" },
+  ],
+  tool_executions: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "tool_name", label: "工具", width: "150px" },
+    { key: "arguments_json", label: "参数" },
+    { key: "duration_ms", label: "耗时 ms", width: "90px" },
     { key: "created_at", label: "时间", width: "150px" },
   ],
   compactions: [

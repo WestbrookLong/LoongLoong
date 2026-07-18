@@ -37,6 +37,10 @@ export interface Settings {
   memoryBatchSize: string;
   temperature: string;
   autoSpeak: boolean;
+  agentEnabled: boolean;
+  agentWorkspaceRoot: string;
+  agentMaxSteps: string;
+  agentTimeoutSeconds: string;
   systemPrompt: string;
   hasApiKey: boolean;
   apiKey?: string;
@@ -62,6 +66,9 @@ export interface Dashboard {
   topicMergeCandidates: number;
   continuityFeedback: number;
   continuityEvalRuns: number;
+  agentTasks: number;
+  agentRuns: number;
+  toolExecutions: number;
   databasePath: string;
 }
 
@@ -86,8 +93,24 @@ export interface ChatResult {
 
 export interface ChatStreamEvent {
   requestId: string;
-  reasoningContentDelta: string;
-  contentDelta: string;
+  reasoningContentDelta?: string;
+  contentDelta?: string;
+  agentEvent?: AgentActivityEvent;
+}
+
+export interface AgentActivityEvent {
+  type: "tool_started" | "tool_completed";
+  step: number;
+  tool_call_id: string;
+  tool: string;
+  arguments?: Record<string, unknown>;
+  result?: {
+    ok: boolean;
+    summary?: string;
+    error?: string;
+    duration_ms?: number;
+    provenance?: Record<string, unknown>;
+  };
 }
 
 export interface StreamingResponse {
@@ -95,6 +118,7 @@ export interface StreamingResponse {
   reasoningContent: string;
   content: string;
   startedAt: number;
+  activities: AgentActivityEvent[];
 }
 
 export interface VoicePayload {
@@ -105,6 +129,7 @@ export interface VoicePayload {
 export interface PetApi {
   bootstrap(): Promise<Bootstrap>;
   sendMessage(payload: { requestId: string; text: string; modality: "text" | "voice"; deep?: boolean }): Promise<ChatResult>;
+  cancelChat(requestId: string): Promise<{ cancelled: boolean }>;
   onChatStream(callback: (event: ChatStreamEvent) => void): () => void;
   newChat(): Promise<{ session: Session; messages: Message[] }>;
   transcribe(payload: VoicePayload): Promise<{ text: string }>;

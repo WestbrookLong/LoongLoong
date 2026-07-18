@@ -46,8 +46,11 @@ export default function App() {
     setStreamingResponse((current) => current?.requestId === event.requestId
       ? {
         ...current,
-        reasoningContent: current.reasoningContent + event.reasoningContentDelta,
-        content: current.content + event.contentDelta,
+        reasoningContent: current.reasoningContent + (event.reasoningContentDelta || ""),
+        content: current.content + (event.contentDelta || ""),
+        activities: event.agentEvent
+          ? [...current.activities.filter((activity) => activity.tool_call_id !== event.agentEvent?.tool_call_id), event.agentEvent]
+          : current.activities,
       }
       : current);
   }), []);
@@ -72,7 +75,7 @@ export default function App() {
       created_at: new Date().toISOString(),
     };
     setMessages((current) => [...current, optimistic]);
-    setStreamingResponse({ requestId, reasoningContent: "", content: "", startedAt: Date.now() });
+    setStreamingResponse({ requestId, reasoningContent: "", content: "", activities: [], startedAt: Date.now() });
     setBusy(true);
     try {
       const result = await window.pet.sendMessage({ requestId, text, modality, deep });
@@ -93,6 +96,10 @@ export default function App() {
       setBusy(false);
     }
   }, [boot?.session.id, busy, notify]);
+
+  const cancel = useCallback(async () => {
+    if (streamingResponse?.requestId) await window.pet.cancelChat(streamingResponse.requestId);
+  }, [streamingResponse?.requestId]);
 
   const voice = useVoiceConversation({
     autoSpeak: settings?.autoSpeak ?? true,
@@ -138,6 +145,7 @@ export default function App() {
             streamingResponse={streamingResponse}
             onSend={(text, deep) => send(text, "text", deep).then(() => undefined)}
             onMic={() => void voice.toggleManual()}
+            onCancel={() => void cancel()}
           />
           <div className="dev-stats" aria-label="开发状态">
             <span><b>{dashboard.events}</b> 事件</span>

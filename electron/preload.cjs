@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("pet", {
   bootstrap: () => ipcRenderer.invoke("app:bootstrap"),
   sendMessage: (payload) => ipcRenderer.invoke("chat:send", payload),
+  cancelChat: (requestId) => ipcRenderer.invoke("chat:cancel", requestId),
   onChatStream: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("chat:stream", listener);

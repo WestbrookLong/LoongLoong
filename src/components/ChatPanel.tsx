@@ -1,7 +1,8 @@
-import { ArrowUp, Mic, Search } from "lucide-react";
+import { ArrowUp, Mic, Search, Square } from "lucide-react";
 import { FormEvent, KeyboardEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { Message, StreamingResponse } from "../types";
 import { ReasoningPanel } from "./ReasoningPanel";
+import { AgentActivityList } from "./AgentActivityList";
 
 const MarkdownMessage = lazy(() => import("./MarkdownMessage").then((module) => ({
   default: module.MarkdownMessage,
@@ -13,6 +14,7 @@ interface Props {
   streamingResponse: StreamingResponse | null;
   onSend: (text: string, deep?: boolean) => Promise<void>;
   onMic: () => void;
+  onCancel: () => void;
 }
 
 function formatTime(value: string) {
@@ -31,7 +33,7 @@ function messageReasoning(message: Message) {
   }
 }
 
-export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic }: Props) {
+export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, onCancel }: Props) {
   const [text, setText] = useState("");
   const [deep, setDeep] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -50,7 +52,7 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic }: 
       initializedRef.current = true;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages.length, busy, streamingResponse?.reasoningContent.length, streamingResponse?.content.length]);
+  }, [messages.length, busy, streamingResponse?.reasoningContent.length, streamingResponse?.content.length, streamingResponse?.activities.length]);
 
   const updateScrollPosition = () => {
     const list = listRef.current;
@@ -113,7 +115,7 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic }: 
             </article>
           );
         })}
-        {busy && streamingResponse && (streamingResponse.reasoningContent || streamingResponse.content) && (
+        {busy && streamingResponse && (streamingResponse.reasoningContent || streamingResponse.content || streamingResponse.activities.length) && (
           <article className="message assistant streaming-message">
             <div className="message-meta"><span>Pet</span><time>正在回答</time></div>
             <ReasoningPanel
@@ -122,6 +124,7 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic }: 
               answerStarted={Boolean(streamingResponse.content)}
               startedAt={streamingResponse.startedAt}
             />
+            <AgentActivityList activities={streamingResponse.activities} />
             {streamingResponse.content && (
               <Suspense fallback={<p>{streamingResponse.content}</p>}>
                 <MarkdownMessage content={streamingResponse.content} />
@@ -129,7 +132,7 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic }: 
             )}
           </article>
         )}
-        {busy && !streamingResponse?.reasoningContent && !streamingResponse?.content && (
+        {busy && !streamingResponse?.reasoningContent && !streamingResponse?.content && !streamingResponse?.activities.length && (
           <div className="thinking-row" aria-label="正在思考">
             <span /><span /><span />
           </div>
@@ -149,9 +152,9 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic }: 
         <button type="button" className="composer-icon" title="语音输入" onClick={onMic} disabled={busy}>
           <Mic size={19} />
         </button>
-        <button type="submit" className="send-button" title="发送" disabled={busy || !text.trim()}>
-          <ArrowUp size={19} />
-        </button>
+        {busy
+          ? <button type="button" className="send-button cancel-run" title="停止 Agent" onClick={onCancel}><Square size={15} /></button>
+          : <button type="submit" className="send-button" title="发送" disabled={!text.trim()}><ArrowUp size={19} /></button>}
       </form>
     </section>
   );

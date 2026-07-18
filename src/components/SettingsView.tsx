@@ -1,4 +1,4 @@
-import { Check, KeyRound, Moon, PlugZap, Save } from "lucide-react";
+import { Bot, Check, KeyRound, Moon, PlugZap, Save } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { applyThemeMode, normalizeThemeMode } from "../theme";
 import type { Settings } from "../types";
@@ -69,6 +69,30 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
             </select>
           </label>
           <p className="setting-hint">切换后立即预览，保存设置后会在下次启动时继续使用。</p>
+        </section>
+
+        <section>
+          <h2><Bot size={15} /> 只读 Agent</h2>
+          <label className="check-field agent-toggle-field">
+            <span>启用 Agent Loop</span>
+            <input type="checkbox" checked={form.agentEnabled} onChange={(event) => update("agentEnabled", event.target.checked)} />
+            <span className="toggle" aria-hidden="true" />
+          </label>
+          <label>
+            <span>允许读取的工作区</span>
+            <input value={form.agentWorkspaceRoot} onChange={(event) => update("agentWorkspaceRoot", event.target.value)} placeholder="例如 D:\\Users\\你\\Projects" />
+          </label>
+          <div className="form-grid compact">
+            <label>
+              <span>最大步骤数</span>
+              <input type="number" min="1" max="12" value={form.agentMaxSteps} onChange={(event) => update("agentMaxSteps", event.target.value)} />
+            </label>
+            <label>
+              <span>总超时（秒）</span>
+              <input type="number" min="30" max="600" step="30" value={form.agentTimeoutSeconds} onChange={(event) => update("agentTimeoutSeconds", event.target.value)} />
+            </label>
+          </div>
+          <p className="setting-hint">Agent 只能列出、搜索和读取这个工作区里的普通文本文件，以及搜索和读取公网网页。密钥、隐藏数据目录、链接跳转、文件写入和命令执行均被阻止。</p>
         </section>
 
         <section>
