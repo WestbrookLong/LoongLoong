@@ -121,6 +121,13 @@ class PetDatabase {
         promotion_score REAL NOT NULL DEFAULT 0,
         epistemic_basis TEXT NOT NULL DEFAULT 'unknown_legacy',
         sensitivity TEXT NOT NULL,
+        slot_id TEXT,
+        temporal_state TEXT NOT NULL DEFAULT 'unknown',
+        asserted_at TEXT,
+        temporal_basis TEXT NOT NULL DEFAULT 'unknown_legacy',
+        temporal_precision TEXT NOT NULL DEFAULT 'unknown',
+        temporal_confidence REAL NOT NULL DEFAULT 0,
+        supersession_reason TEXT,
         valid_from TEXT,
         valid_to TEXT,
         last_confirmed_at TEXT,
@@ -255,6 +262,50 @@ class PetDatabase {
         PRIMARY KEY (source_claim_id, target_claim_id, relation),
         FOREIGN KEY (source_claim_id) REFERENCES memory_claims(id),
         FOREIGN KEY (target_claim_id) REFERENCES memory_claims(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS claim_slots (
+        id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        predicate TEXT NOT NULL,
+        scope_type TEXT NOT NULL,
+        scope_id TEXT,
+        canonical_key TEXT NOT NULL UNIQUE,
+        cardinality TEXT NOT NULL DEFAULT 'single',
+        temporal_mode TEXT NOT NULL DEFAULT 'current_state',
+        status TEXT NOT NULL DEFAULT 'active',
+        canonical_slot_id TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (canonical_slot_id) REFERENCES claim_slots(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS claim_transitions (
+        id TEXT PRIMARY KEY,
+        slot_id TEXT NOT NULL,
+        from_claim_id TEXT,
+        to_claim_id TEXT,
+        transition_type TEXT NOT NULL,
+        effective_at TEXT,
+        temporal_basis TEXT NOT NULL DEFAULT 'unknown',
+        source_run_id TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (slot_id) REFERENCES claim_slots(id),
+        FOREIGN KEY (from_claim_id) REFERENCES memory_claims(id),
+        FOREIGN KEY (to_claim_id) REFERENCES memory_claims(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS claim_transition_evidence (
+        transition_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        relation TEXT NOT NULL DEFAULT 'supports',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (transition_id, event_id, relation),
+        FOREIGN KEY (transition_id) REFERENCES claim_transitions(id),
+        FOREIGN KEY (event_id) REFERENCES events(id)
       );
 
       CREATE TABLE IF NOT EXISTS topic_threads (
@@ -609,6 +660,9 @@ class PetDatabase {
       CREATE INDEX IF NOT EXISTS idx_continuity_feedback_retrieval ON continuity_feedback(retrieval_log_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_continuity_eval_time ON continuity_eval_runs(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_continuity_profiles_status ON continuity_profiles(status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_claim_slots_lookup ON claim_slots(namespace, scope_type, scope_id, subject, predicate);
+      CREATE INDEX IF NOT EXISTS idx_claim_transitions_slot ON claim_transitions(slot_id, effective_at DESC, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_claim_transition_evidence_event ON claim_transition_evidence(event_id);
     `);
 
     const ensureColumn = (table, column, definition) => {
@@ -620,6 +674,13 @@ class PetDatabase {
     ensureColumn("events", "continuity_score_version", "TEXT NOT NULL DEFAULT 'unknown-legacy'");
     ensureColumn("events", "continuity_components_json", "TEXT NOT NULL DEFAULT '{}'");
     ensureColumn("memory_claims", "epistemic_basis", "TEXT NOT NULL DEFAULT 'unknown_legacy'");
+    ensureColumn("memory_claims", "slot_id", "TEXT");
+    ensureColumn("memory_claims", "temporal_state", "TEXT NOT NULL DEFAULT 'unknown'");
+    ensureColumn("memory_claims", "asserted_at", "TEXT");
+    ensureColumn("memory_claims", "temporal_basis", "TEXT NOT NULL DEFAULT 'unknown_legacy'");
+    ensureColumn("memory_claims", "temporal_precision", "TEXT NOT NULL DEFAULT 'unknown'");
+    ensureColumn("memory_claims", "temporal_confidence", "REAL NOT NULL DEFAULT 0");
+    ensureColumn("memory_claims", "supersession_reason", "TEXT");
     ensureColumn("context_snapshots", "continuity_refs_json", "TEXT NOT NULL DEFAULT '{}'");
     ensureColumn("continuity_update_runs", "source_message_ids_json", "TEXT NOT NULL DEFAULT '[]'");
     ensureColumn("state_revisions", "idempotency_key", "TEXT");
@@ -641,6 +702,10 @@ class PetDatabase {
     ensureColumn("topic_items", "valid_to", "TEXT");
     ensureColumn("open_loops", "continuity_score_version", "TEXT NOT NULL DEFAULT 'unknown-legacy'");
     ensureColumn("open_loops", "continuity_components_json", "TEXT NOT NULL DEFAULT '{}'");
+    this.migrateClaimSlots();
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_memory_claims_slot_state ON memory_claims(slot_id, status, temporal_state, valid_from DESC)");
+    this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_claim_single_current_active ON memory_claims(slot_id) WHERE slot_id IS NOT NULL AND cardinality = 'single' AND status = 'active' AND temporal_state = 'current'");
+    this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_claim_set_current_value_active ON memory_claims(slot_id, value_hash) WHERE slot_id IS NOT NULL AND cardinality = 'set' AND status = 'active' AND temporal_state = 'current'");
     this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_state_revisions_idempotency ON state_revisions(idempotency_key) WHERE idempotency_key IS NOT NULL");
     this.db.run(
       `UPDATE memory_claims SET epistemic_basis = 'stated_by_user'
@@ -650,6 +715,117 @@ class PetDatabase {
          WHERE me.claim_id = memory_claims.id AND e.actor = 'user'
        )`,
     );
+  }
+
+  migrateClaimSlots() {
+    const normalize = (value, fallback = "unknown") => String(value || fallback).trim().toLowerCase().replace(/\s+/g, "_");
+    const slotIdFor = (key) => `slot_${crypto.createHash("sha256").update(key).digest("hex").slice(0, 24)}`;
+    const now = isoNow();
+    const claims = this.all("SELECT * FROM memory_claims ORDER BY created_at ASC, id ASC");
+
+    for (const claim of claims) {
+      const canonicalKey = [
+        normalize(claim.namespace, "user"),
+        normalize(claim.scope_type, "global"),
+        normalize(claim.scope_id, "global"),
+        normalize(claim.subject, "user"),
+        normalize(claim.predicate, claim.claim_type || "fact"),
+      ].join(":");
+      const slotId = claim.slot_id || slotIdFor(canonicalKey);
+      const cardinality = claim.cardinality === "multi" || claim.cardinality === "set" ? "set" : "single";
+      this.db.run(
+        `INSERT INTO claim_slots (
+          id, namespace, subject, predicate, scope_type, scope_id, canonical_key,
+          cardinality, temporal_mode, status, created_at, updated_at
+        ) VALUES ($id, $namespace, $subject, $predicate, $scopeType, $scopeId, $canonicalKey,
+          $cardinality, 'current_state', 'active', $createdAt, $updatedAt)
+        ON CONFLICT(canonical_key) DO UPDATE SET
+          cardinality = CASE WHEN claim_slots.cardinality = 'set' OR excluded.cardinality = 'set' THEN 'set' ELSE 'single' END,
+          updated_at = excluded.updated_at`,
+        {
+          $id: slotId,
+          $namespace: claim.namespace || "user",
+          $subject: claim.subject || "user",
+          $predicate: claim.predicate || claim.claim_type || "fact",
+          $scopeType: claim.scope_type || "global",
+          $scopeId: claim.scope_id || null,
+          $canonicalKey: canonicalKey,
+          $cardinality: cardinality,
+          $createdAt: claim.created_at || now,
+          $updatedAt: now,
+        },
+      );
+      const storedSlot = this.get("SELECT id, cardinality FROM claim_slots WHERE canonical_key = $key", { $key: canonicalKey });
+      const temporalState = claim.temporal_state && claim.temporal_state !== "unknown"
+        ? claim.temporal_state
+        : claim.status === "active" && claim.valid_to && claim.valid_to <= now
+          ? "historical"
+          : claim.status === "active" && claim.valid_from && claim.valid_from > now
+            ? "future"
+            : claim.status === "active"
+              ? "current"
+              : "unknown";
+      this.db.run(
+        `UPDATE memory_claims SET
+          slot_id = $slotId,
+          cardinality = $cardinality,
+          temporal_state = $temporalState,
+          asserted_at = COALESCE(asserted_at, created_at),
+          temporal_basis = CASE WHEN temporal_basis = 'unknown_legacy' THEN 'legacy_default' ELSE temporal_basis END
+         WHERE id = $id`,
+        {
+          $slotId: storedSlot.id,
+          $cardinality: storedSlot.cardinality,
+          $temporalState: temporalState,
+          $id: claim.id,
+        },
+      );
+    }
+
+    this.db.run(
+      `UPDATE memory_claims SET cardinality = (
+        SELECT cardinality FROM claim_slots WHERE claim_slots.id = memory_claims.slot_id
+      ) WHERE slot_id IS NOT NULL`,
+    );
+
+    const conflictingSlots = this.all(
+      `SELECT slot_id, COUNT(*) AS count, COUNT(DISTINCT value_hash) AS value_count
+       FROM memory_claims
+       WHERE slot_id IS NOT NULL AND cardinality = 'single' AND status = 'active' AND temporal_state = 'current'
+       GROUP BY slot_id HAVING COUNT(*) > 1`,
+    );
+    for (const group of conflictingSlots) {
+      const members = this.all(
+        `SELECT * FROM memory_claims WHERE slot_id = $slotId
+         AND cardinality = 'single' AND status = 'active' AND temporal_state = 'current'
+         ORDER BY confidence DESC, updated_at DESC, id ASC`,
+        { $slotId: group.slot_id },
+      );
+      if (Number(group.value_count) === 1) {
+        const [keeper, ...duplicates] = members;
+        for (const duplicate of duplicates) {
+          this.db.run(
+            "INSERT OR IGNORE INTO memory_evidence (claim_id, event_id, relation, weight, created_at) SELECT $keeperId, event_id, relation, weight, created_at FROM memory_evidence WHERE claim_id = $duplicateId",
+            { $keeperId: keeper.id, $duplicateId: duplicate.id },
+          );
+          this.db.run(
+            "UPDATE memory_claims SET status = 'superseded', temporal_state = 'unknown', superseded_by = $keeperId, supersession_reason = 'legacy_duplicate', updated_at = $now WHERE id = $id",
+            { $keeperId: keeper.id, $now: now, $id: duplicate.id },
+          );
+          this.db.run(
+            "INSERT OR IGNORE INTO claim_relations (source_claim_id, target_claim_id, relation, confidence, source_run_id, created_at) VALUES ($source, $target, 'same_as', 1, 'migration-v0.6', $now)",
+            { $source: duplicate.id, $target: keeper.id, $now: now },
+          );
+        }
+      } else {
+        this.db.run(
+          `UPDATE memory_claims SET status = 'disputed', temporal_state = 'unknown',
+           supersession_reason = 'legacy_unresolved_conflict', updated_at = $now
+           WHERE slot_id = $slotId AND cardinality = 'single' AND status = 'active' AND temporal_state = 'current'`,
+          { $slotId: group.slot_id, $now: now },
+        );
+      }
+    }
   }
 
   recoverInterruptedRuns() {

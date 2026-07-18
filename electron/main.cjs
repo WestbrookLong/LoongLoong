@@ -132,6 +132,8 @@ function dashboard() {
     events: count("events"),
     memories: count("memory_claims", "WHERE status = 'active'"),
     candidates: count("memory_claims", "WHERE status = 'candidate'"),
+    claimSlots: count("claim_slots", "WHERE status = 'active'"),
+    claimTransitions: count("claim_transitions"),
     logs: count("logs"),
     retrievals: count("retrieval_logs"),
     contextSnapshots: count("context_snapshots"),
@@ -434,6 +436,22 @@ function records({ type, search = "", limit = 200 } = {}) {
     claim_relations: {
       sql: `SELECT * FROM claim_relations
             WHERE relation LIKE $query ORDER BY created_at DESC LIMIT $limit`,
+    },
+    claim_slots: {
+      sql: `SELECT s.*, COUNT(c.id) AS claim_count,
+            COUNT(CASE WHEN c.status = 'active' AND c.temporal_state = 'current' THEN 1 END) AS current_count
+            FROM claim_slots s LEFT JOIN memory_claims c ON c.slot_id = s.id
+            WHERE s.subject LIKE $query OR s.predicate LIKE $query OR s.canonical_key LIKE $query
+            GROUP BY s.id ORDER BY s.updated_at DESC LIMIT $limit`,
+    },
+    claim_transitions: {
+      sql: `SELECT t.*, old.canonical_text AS from_text, next.canonical_text AS to_text
+            FROM claim_transitions t
+            LEFT JOIN memory_claims old ON old.id = t.from_claim_id
+            LEFT JOIN memory_claims next ON next.id = t.to_claim_id
+            WHERE t.transition_type LIKE $query OR COALESCE(old.canonical_text, '') LIKE $query
+               OR COALESCE(next.canonical_text, '') LIKE $query
+            ORDER BY t.created_at DESC LIMIT $limit`,
     },
     topics: {
       sql: `SELECT t.*, COUNT(DISTINCT ti.id) AS item_count,

@@ -1,9 +1,9 @@
 # Pet 记忆系统设计与技术实现
 
-> 文档版本：Memory v0.5
+> 文档版本：Memory v0.6
 > 对应工程：Pet v0.1  
 > 状态：描述当前仓库中已经实现的行为，不把规划能力视为现有能力  
-> 核心代码：[electron/memory.cjs](./electron/memory.cjs)、[electron/memory-intelligence.cjs](./electron/memory-intelligence.cjs)、[electron/continuity.cjs](./electron/continuity.cjs)、[electron/state.cjs](./electron/state.cjs)、[electron/topic-governance.cjs](./electron/topic-governance.cjs)、[electron/topic-merge.cjs](./electron/topic-merge.cjs)、[electron/continuity-profiles.cjs](./electron/continuity-profiles.cjs)、[electron/continuity-eval.cjs](./electron/continuity-eval.cjs)、[electron/database.cjs](./electron/database.cjs)、[electron/main.cjs](./electron/main.cjs)
+> 核心代码：[electron/memory.cjs](./electron/memory.cjs)、[electron/memory-intelligence.cjs](./electron/memory-intelligence.cjs)、[electron/claim-governance.cjs](./electron/claim-governance.cjs)、[electron/continuity.cjs](./electron/continuity.cjs)、[electron/state.cjs](./electron/state.cjs)、[electron/topic-governance.cjs](./electron/topic-governance.cjs)、[electron/topic-merge.cjs](./electron/topic-merge.cjs)、[electron/continuity-profiles.cjs](./electron/continuity-profiles.cjs)、[electron/continuity-eval.cjs](./electron/continuity-eval.cjs)、[electron/database.cjs](./electron/database.cjs)、[electron/main.cjs](./electron/main.cjs)
 
 ## 1. 设计目标
 
@@ -631,26 +631,107 @@ Shadow 阶段每轮同时计算 active/challenger 路由，但只执行 active �
 ## 9. Claim 状态机
 
 ```mermaid
-stateDiagram-v2
-    [*] --> candidate: 普通 LLM 候选
-    [*] --> active: 明确表达且高置信
-    candidate --> active: 分数达标且无冲突
-    candidate --> disputed: 有关联冲突但证据不足
-    active --> disputed: 与新 claim 冲突且证据不足
-    active --> superseded: 新 claim 高分且关系证据充分
-    candidate --> superseded: 与已有记忆重复
-    disputed --> superseded: 质量清理或后续替代
-    candidate --> rejected: 临时运行状态
-    active --> rejected: 启动质量清理发现无效状态
+flowchart LR
+    Evidence["Message / Event evidence"] --> Slots["召回 Claim Slots"]
+    Slots --> LLM["LLM 受约束分类"]
+    LLM --> Proposal["Slot + Value + Temporal proposal"]
+    Proposal --> Reducer["确定性 Claim Reducer"]
+    Reducer --> Claims["memory_claims"]
+    Reducer --> Timeline["claim_transitions"]
+    Reducer --> Guard["SQLite partial unique indexes"]
 ```
+
+### 9.1 Claim Slot 与 Claim Assertion
+
+`claim_slots` 表示事实槽位，例如 `user.residence`；`memory_claims` 表示该槽位在某段时间内的具体断言，例如“2026 年 6 月住在北京”和“2026 年 7 月起住在上海”。槽位身份由 namespace、scope、subject、predicate 构成，不包含 value。
+
+槽位有两种基数：
+
+- `single`：同一时刻只能有一个当前值，如居住地、时区、主项目框架；
+- `set`：同一时刻可有多个值，如喜欢的饮品、掌握的语言。
+
+槽位还有 `current_state`、`event`、`atemporal` 三种时间模式。LLM 可以提议复用现有槽位或创建新槽位，但复用 ID 必须来自 prompt 提供的候选列表，`expected_version` 必须匹配；新槽位置信度不足时 reducer 拒绝写入。
+
+### 9.2 LLM proposal 协议
+
+实时提取、上下文压缩伴生提取、每日智能巩固使用同一个 `claimProposalContract()`：
+
+```json
+{
+  "slot_resolution": {
+    "action": "reuse_slot",
+    "slot_id": "slot_user_residence",
+    "expected_version": 1,
+    "confidence": 0.97
+  },
+  "value_resolution": {
+    "relation": "temporal_update",
+    "target_claim_ids": ["claim_beijing"],
+    "confidence": 0.95
+  },
+  "temporal": {
+    "valid_from": "2026-07-01T00:00:00.000Z",
+    "valid_to": null,
+    "basis": "explicit",
+    "precision": "month",
+    "current": "true",
+    "confidence": 0.92
+  }
+}
+```
+
+value 关系只允许：`same_value`、`coexist`、`temporal_update`、`correction`、`unresolved_conflict`、`refinement`。LLM 不直接写状态，只负责语义分类；`applyClaimProposal()` 校验证据、槽位版本、基数、时间和认识论来源后执行更新。
+
+### 9.3 三套正交状态
+
+Claim 不再用单个 `status` 同时表达可信度、当前性和来源：
+
+| 维度 | 字段 | 取值与含义 |
+|---|---|---|
+| 生命周期 | `status` | candidate、active、disputed、superseded、rejected |
+| 时间位置 | `temporal_state` | current、historical、future、unknown |
+| 认识论来源 | `epistemic_basis` | stated_by_user、observed_by_agent、inferred、mutually_confirmed、tool_verified、unknown_legacy |
+
+`asserted_at` 是这条信息被说出或观察到的时间；`valid_from` / `valid_to` 是现实事实的有效区间。两者不能互相替代。`temporal_basis` 与 `temporal_precision` 记录时间来自明确表达、消息时间锚定还是推断，以及精确到日/月或未知。
+
+### 9.4 确定性状态迁移
+
+| LLM 分类 | reducer 行为 |
+|---|---|
+| `same_value` | 不新建 Claim，追加证据、提高置信度并写 `confirmed_again` |
+| `coexist` | 仅 `set` 槽位允许；两个不同 value 都可为 active/current |
+| `temporal_update` | 旧 Claim 保持 active 但转 historical，新 Claim 成为 active/current，并写 `transitioned_to` |
+| `correction` | 旧 Claim 变为 superseded/unknown，新 Claim active/current，并写 `corrected_by` |
+| `refinement` | 旧 Claim superseded，新 Claim active/current，并写 `refined_by` |
+| `unresolved_conflict` | 新旧 Claim 都变为 disputed/unknown，不擅自选边 |
+
+如果传入的事实时间早于已知当前事实，reducer 会将其作为 historical backfill 插入，不覆盖当前值。`claim_transitions` 与 `claim_transition_evidence` 保存变动类型、生效时间、时间依据、来源 run 和证据事件，形成可审计事实变动线。
+
+### 9.5 数据库不变量与旧数据迁移
+
+SQLite partial unique index 保证：
+
+```sql
+-- single 槽位最多一个 active/current
+UNIQUE(slot_id) WHERE cardinality='single' AND status='active' AND temporal_state='current'
+
+-- set 槽位同一个 value 最多一个 active/current
+UNIQUE(slot_id, value_hash) WHERE cardinality='set' AND status='active' AND temporal_state='current'
+```
+
+启动迁移按旧 `claim_key` 建立槽位。同槽位同值的多条 active 会合并证据；同槽位不同值的旧双 active 会全部降为 disputed。旧版把写入时间默认写入 `valid_from`，迁移不会据此推断现实时间先后，避免凭技术时间制造虚假搬迁历史。
+
+### 9.6 检索语义
+
+普通查询只检索 active/current 和仍需向用户说明的 disputed Claim；“以前、什么时候、搬迁历史、before、used to”等时态查询才额外检索 active/historical。历史 Claim 对应的证据 Event 同样遵守该路由，防止普通现状问题通过事件侧泄漏旧事实。
 
 状态含义：
 
 | 状态 | 是否参与普通检索 | 含义 |
 |---|---|---|
 | `candidate` | 否 | 有证据但尚未达到稳定长期记忆标准 |
-| `active` | 是 | 当前有效的长期记忆 |
-| `disputed` | 否 | 与其他 claim 存在未解决冲突 |
+| `active` | 取决于 `temporal_state` | current 进入普通检索，historical 只进入时态检索 |
+| `disputed` | 是，附带不确定性协议 | 与其他 claim 存在未解决冲突，模型必须明确争议 |
 | `superseded` | 否 | 已被更新版本或相同记忆取代 |
 | `rejected` | 否 | 被确定性规则判定为不应长期保存 |
 
@@ -762,11 +843,18 @@ API Key 不在该表中。它使用 Electron `safeStorage` 加密后保存在 `m
 | `promotion_score` | REAL | 晋升评分 |
 | `epistemic_basis` | TEXT | stated_by_user、observed_by_agent、inferred、mutually_confirmed、tool_verified 或 unknown_legacy |
 | `sensitivity` | TEXT | 当前写入 `private` |
+| `slot_id` | TEXT | 所属 `claim_slots.id`，所有状态归并以槽位为边界 |
+| `temporal_state` | TEXT | current、historical、future、unknown |
+| `asserted_at` | TEXT | 信息被表达或观察的时间 |
+| `temporal_basis` | TEXT | explicit、message_time_assumption、inferred、legacy_default 等 |
+| `temporal_precision` | TEXT | exact、day、month、unknown |
+| `temporal_confidence` | REAL | 时间解释置信度 |
 | `valid_from`, `valid_to` | TEXT | 有效期 |
 | `last_confirmed_at` | TEXT | 最近被新证据确认 |
 | `last_recalled_at`, `recall_count` | TEXT / INTEGER | 检索强化统计 |
 | `review_after` | TEXT | 预留复审时间 |
 | `superseded_by` | TEXT | 替代该 claim 的新 claim ID |
+| `supersession_reason` | TEXT | correction、refinement、legacy_duplicate 等替代理由 |
 | `version` | INTEGER | 更新版本 |
 | `created_at`, `updated_at` | TEXT | 生命周期时间 |
 
@@ -790,6 +878,44 @@ API Key 不在该表中。它使用 Electron `safeStorage` 加密后保存在 `m
 | `confidence` | REAL | 关系置信度 |
 | `source_run_id` | TEXT | 产生关系的 extraction/consolidation run |
 | `created_at` | TEXT | 建立时间 |
+
+### 10.9a `claim_slots`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | TEXT PK | 稳定槽位 ID；默认由 canonical key hash 生成 |
+| `namespace`, `subject`, `predicate` | TEXT | 槽位语义身份 |
+| `scope_type`, `scope_id` | TEXT | 作用域 |
+| `canonical_key` | TEXT UNIQUE | 不含 value 的规范槽位键 |
+| `cardinality` | TEXT | single / set |
+| `temporal_mode` | TEXT | current_state / event / atemporal |
+| `status` | TEXT | active，预留 merged/archived 治理 |
+| `canonical_slot_id` | TEXT FK | 预留槽位 alias/merge 后的 canonical 指向 |
+| `version` | INTEGER | proposal 的乐观并发版本 |
+| `created_at`, `updated_at` | TEXT | 生命周期 |
+
+### 10.9b `claim_transitions`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | TEXT PK | 变动 UUID |
+| `slot_id` | TEXT FK | 发生变动的事实槽位 |
+| `from_claim_id`, `to_claim_id` | TEXT FK | 变动前后 Claim；重复确认时可为同一 ID |
+| `transition_type` | TEXT | confirmed_again、transitioned_to、corrected_by、refined_by、conflicts_with、coexists_with |
+| `effective_at` | TEXT | 现实生效时间；未知时为空 |
+| `temporal_basis` | TEXT | 生效时间依据 |
+| `source_run_id` | TEXT | extraction/compaction/consolidation run |
+| `metadata_json` | TEXT | 历史回填方向等 reducer 元数据 |
+| `created_at` | TEXT | 记录时间 |
+
+### 10.9c `claim_transition_evidence`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `transition_id` | TEXT PK/FK | Claim transition |
+| `event_id` | TEXT PK/FK | 支持该迁移判断的原始事件 |
+| `relation` | TEXT PK | 当前为 supports |
+| `created_at` | TEXT | 绑定时间 |
 
 ### 10.10 `context_snapshots`
 

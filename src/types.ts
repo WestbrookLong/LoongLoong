@@ -47,6 +47,8 @@ export interface Dashboard {
   events: number;
   memories: number;
   candidates: number;
+  claimSlots: number;
+  claimTransitions: number;
   logs: number;
   retrievals: number;
   contextSnapshots: number;
