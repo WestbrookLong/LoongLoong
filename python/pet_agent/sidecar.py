@@ -19,9 +19,11 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from pet_agent.approvals import ApprovalInbox
     from pet_agent.runtime import AgentCancelled, AgentRuntime
+    from pet_agent.unicode_safety import repair_value
 else:
     from .approvals import ApprovalInbox
     from .runtime import AgentCancelled, AgentRuntime
+    from .unicode_safety import repair_value
 
 WRITE_LOCK = threading.Lock()
 PROTOCOL_VERSION = 2
@@ -39,7 +41,7 @@ RUNS: dict[str, RunState] = {}
 
 def emit(message: dict[str, Any]) -> None:
     with WRITE_LOCK:
-        sys.stdout.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
+        sys.stdout.write(json.dumps(repair_value(message), ensure_ascii=True, separators=(",", ":")) + "\n")
         sys.stdout.flush()
 
 
@@ -77,7 +79,7 @@ def main() -> None:
                     continue
                 state = RunState()
                 RUNS[run_id] = state
-                threading.Thread(target=run_worker, args=(run_id, message["payload"], state), daemon=True).start()
+                threading.Thread(target=run_worker, args=(run_id, repair_value(message["payload"]), state), daemon=True).start()
             elif kind == "cancel_run":
                 if state := RUNS.get(str(message.get("run_id"))):
                     state.cancel.set()

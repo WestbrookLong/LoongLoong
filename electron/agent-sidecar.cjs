@@ -2,6 +2,37 @@ const path = require("node:path");
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 
+function wellFormedString(value) {
+  const text = String(value);
+  let output = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const low = text.charCodeAt(index + 1);
+      if (low >= 0xDC00 && low <= 0xDFFF) {
+        output += text[index] + text[index + 1];
+        index += 1;
+      } else {
+        output += "\uFFFD";
+      }
+    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+      output += "\uFFFD";
+    } else {
+      output += text[index];
+    }
+  }
+  return output;
+}
+
+function wellFormedValue(value) {
+  if (typeof value === "string") return wellFormedString(value);
+  if (Array.isArray(value)) return value.map(wellFormedValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [wellFormedString(key), wellFormedValue(item)]));
+  }
+  return value;
+}
+
 class AgentSidecar {
   constructor({ onLog = () => {} } = {}) {
     this.onLog = onLog;
@@ -45,7 +76,7 @@ class AgentSidecar {
           this.stdoutBuffer = this.stdoutBuffer.slice(newline + 1);
           if (!line) continue;
           try {
-            const event = JSON.parse(line);
+            const event = wellFormedValue(JSON.parse(line));
             if (event.type === "ready") {
               clearTimeout(timer);
               if (Number(event.protocol || 0) < 2) {
@@ -97,7 +128,7 @@ class AgentSidecar {
 
   send(message) {
     if (!this.child?.stdin?.writable) throw new Error("Agent sidecar is not running.");
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
+    this.child.stdin.write(`${JSON.stringify(wellFormedValue(message))}\n`);
   }
 
   async run(runId, payload, onEvent = () => {}) {
@@ -128,4 +159,4 @@ class AgentSidecar {
   }
 }
 
-module.exports = { AgentSidecar };
+module.exports = { AgentSidecar, wellFormedString, wellFormedValue };

@@ -1,7 +1,9 @@
 import json
 import unittest
+from unittest.mock import patch
 
-from pet_agent.model_provider import parse_sse_payloads
+from pet_agent.model_provider import OpenAICompatibleProvider, parse_sse_payloads
+from pet_agent.unicode_safety import SurrogateStream, repair_surrogates, repair_value
 
 
 class ModelProviderTests(unittest.TestCase):
@@ -17,6 +19,75 @@ class ModelProviderTests(unittest.TestCase):
         self.assertEqual(result.tool_calls[0].name, "web_search")
         self.assertEqual(json.loads(result.tool_calls[0].arguments_text), {"query": "Pet"})
         self.assertEqual(result.usage["total_tokens"], 9)
+
+    def test_repairs_surrogate_pair_split_across_stream_deltas(self):
+        stream = SurrogateStream()
+        first = stream.feed("thinking " + chr(0xD83D))
+        second = stream.feed(chr(0xDC81) + " done")
+        self.assertEqual(first, "thinking ")
+        self.assertEqual(second, "💁 done")
+        self.assertEqual(stream.finish(), "")
+        chunks = [
+            {"choices": [{"delta": {"reasoning_content": chr(0xD83D)}}]},
+            {"choices": [{"delta": {"reasoning_content": chr(0xDC81)}, "finish_reason": "stop"}]},
+        ]
+        parsed = parse_sse_payloads([f"data: {json.dumps(chunk)}" for chunk in chunks])
+        self.assertEqual(parsed.reasoning_content, "💁")
+
+    def test_repairs_unpaired_surrogates_before_json_transport(self):
+        lone_low = chr(0xDC81)
+        self.assertEqual(repair_surrogates(f"a{lone_low}b"), "a�b")
+        repaired = repair_value({"messages": [{"content": lone_low}]})
+        self.assertEqual(repaired["messages"][0]["content"], "�")
+        json.dumps(repaired, ensure_ascii=False).encode("utf-8")
+
+
+class ModelProviderStreamingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_transport_repairs_split_surrogates_and_request_messages(self):
+        high = chr(0xD83D)
+        low = chr(0xDC81)
+        lines = [
+            "data: " + json.dumps({"choices": [{"delta": {"reasoning_content": high}}]}),
+            "data: " + json.dumps({"choices": [{"delta": {"reasoning_content": low}, "finish_reason": "stop"}]}),
+            "data: [DONE]",
+        ]
+
+        class FakeResponse:
+            status_code = 200
+
+            async def aiter_lines(self):
+                for line in lines:
+                    yield line
+
+            async def aclose(self):
+                return None
+
+        class FakeClient:
+            request_json = None
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            def build_request(self, _method, _url, **kwargs):
+                self.request_json = kwargs["json"]
+                return kwargs
+
+            async def send(self, _request, **_kwargs):
+                return FakeResponse()
+
+        client = FakeClient()
+        provider = OpenAICompatibleProvider(base_url="https://example.com/v1", api_key="test", model="test")
+        events = []
+        with patch("pet_agent.model_provider.httpx.AsyncClient", return_value=client):
+            result = await provider.stream_step(
+                [{"role": "user", "content": f"before{low}after"}], [], events.append,
+            )
+        self.assertEqual(client.request_json["messages"][0]["content"], "before�after")
+        self.assertEqual(result.reasoning_content, "💁")
+        self.assertEqual(events, [{"type": "reasoning_delta", "text": "💁"}])
 
 
 if __name__ == "__main__":

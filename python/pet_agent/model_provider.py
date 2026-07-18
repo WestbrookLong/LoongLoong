@@ -6,6 +6,8 @@ from typing import Any, AsyncIterator, Callable
 
 import httpx
 
+from .unicode_safety import SurrogateStream, repair_surrogates, repair_value
+
 
 @dataclass
 class ToolCall:
@@ -47,7 +49,13 @@ def parse_sse_payloads(lines: list[str]) -> ModelStep:
             function = part.get("function") or {}
             call["name"] += function.get("name") or ""
             call["arguments"] += function.get("arguments") or ""
-    result.tool_calls = [ToolCall(value["id"] or f"call_{index}", value["name"], value["arguments"]) for index, value in sorted(calls.items())]
+    result.content = repair_surrogates(result.content)
+    result.reasoning_content = repair_surrogates(result.reasoning_content)
+    result.tool_calls = [ToolCall(
+        repair_surrogates(value["id"] or f"call_{index}"),
+        repair_surrogates(value["name"]),
+        repair_surrogates(value["arguments"]),
+    ) for index, value in sorted(calls.items())]
     return result
 
 
@@ -60,11 +68,11 @@ class OpenAICompatibleProvider:
 
     async def stream_step(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]],
                           on_event: Callable[[dict[str, Any]], None]) -> ModelStep:
-        body = {
+        body = repair_value({
             "model": self.model, "messages": messages, "tools": tools, "tool_choice": "auto",
             "parallel_tool_calls": False, "temperature": self.temperature, "stream": True,
             "stream_options": {"include_usage": True}, "enable_thinking": True,
-        }
+        })
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=20), follow_redirects=False) as client:
             response = await client.send(client.build_request("POST", self.url, headers=headers, json=body), stream=True)
@@ -77,6 +85,8 @@ class OpenAICompatibleProvider:
                 raise RuntimeError(f"Model API returned HTTP {response.status_code}: {raw}")
             calls: dict[int, dict[str, str]] = {}
             result = ModelStep()
+            reasoning_stream = SurrogateStream()
+            content_stream = SurrogateStream()
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -88,8 +98,8 @@ class OpenAICompatibleProvider:
                     result.usage = item["usage"]
                 choice = (item.get("choices") or [{}])[0]
                 delta = choice.get("delta") or {}
-                reasoning = delta.get("reasoning_content") or ""
-                content = delta.get("content") or ""
+                reasoning = reasoning_stream.feed(delta.get("reasoning_content") or "")
+                content = content_stream.feed(delta.get("content") or "")
                 if reasoning:
                     result.reasoning_content += reasoning
                     on_event({"type": "reasoning_delta", "text": reasoning})
@@ -104,6 +114,18 @@ class OpenAICompatibleProvider:
                     function = part.get("function") or {}
                     call["name"] += function.get("name") or ""
                     call["arguments"] += function.get("arguments") or ""
+            reasoning_tail = reasoning_stream.finish()
+            content_tail = content_stream.finish()
+            if reasoning_tail:
+                result.reasoning_content += reasoning_tail
+                on_event({"type": "reasoning_delta", "text": reasoning_tail})
+            if content_tail:
+                result.content += content_tail
+                on_event({"type": "answer_delta", "text": content_tail})
             await response.aclose()
-            result.tool_calls = [ToolCall(value["id"] or f"call_{index}", value["name"], value["arguments"]) for index, value in sorted(calls.items())]
+            result.tool_calls = [ToolCall(
+                repair_surrogates(value["id"] or f"call_{index}"),
+                repair_surrogates(value["name"]),
+                repair_surrogates(value["arguments"]),
+            ) for index, value in sorted(calls.items())]
             return result
