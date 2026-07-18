@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "build": "tsc --noEmit && vite build",
+    "build:sidecar": "python python/build_sidecar.py",
     "start": "electron .",
     "test": "node --test tests/memory.test.cjs tests/model.test.cjs tests/intelligence.test.cjs tests/continuity.test.cjs tests/state-governance.test.cjs tests/topic-merge-eval.test.cjs tests/claim-governance.test.cjs tests/agent-audit.test.cjs && npm run test:agent",
     "test:agent": "python -m unittest discover -s python -p test_*.py",

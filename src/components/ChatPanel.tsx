@@ -3,6 +3,7 @@ import { FormEvent, KeyboardEvent, lazy, Suspense, useEffect, useRef, useState }
 import type { Message, StreamingResponse } from "../types";
 import { ReasoningPanel } from "./ReasoningPanel";
 import { AgentActivityList } from "./AgentActivityList";
+import { AgentApprovalCards } from "./AgentApprovalCard";
 
 const MarkdownMessage = lazy(() => import("./MarkdownMessage").then((module) => ({
   default: module.MarkdownMessage,
@@ -15,6 +16,7 @@ interface Props {
   onSend: (text: string, deep?: boolean) => Promise<void>;
   onMic: () => void;
   onCancel: () => void;
+  onResolveApproval: (approvalId: string, decision: "approve" | "deny", scope?: "once" | "task", chooseDirectory?: boolean) => void;
 }
 
 function formatTime(value: string) {
@@ -33,7 +35,7 @@ function messageReasoning(message: Message) {
   }
 }
 
-export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, onCancel }: Props) {
+export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, onCancel, onResolveApproval }: Props) {
   const [text, setText] = useState("");
   const [deep, setDeep] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -52,7 +54,7 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, on
       initializedRef.current = true;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages.length, busy, streamingResponse?.reasoningContent.length, streamingResponse?.content.length, streamingResponse?.activities.length]);
+  }, [messages.length, busy, streamingResponse?.reasoningContent.length, streamingResponse?.content.length, streamingResponse?.activities.length, streamingResponse?.approvals.length]);
 
   const updateScrollPosition = () => {
     const list = listRef.current;
@@ -115,7 +117,7 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, on
             </article>
           );
         })}
-        {busy && streamingResponse && (streamingResponse.reasoningContent || streamingResponse.content || streamingResponse.activities.length) && (
+        {busy && streamingResponse && (streamingResponse.reasoningContent || streamingResponse.content || streamingResponse.activities.length || streamingResponse.approvals.length) && (
           <article className="message assistant streaming-message">
             <div className="message-meta"><span>Pet</span><time>正在回答</time></div>
             <ReasoningPanel
@@ -125,6 +127,7 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, on
               startedAt={streamingResponse.startedAt}
             />
             <AgentActivityList activities={streamingResponse.activities} />
+            <AgentApprovalCards approvals={streamingResponse.approvals} onResolve={onResolveApproval} />
             {streamingResponse.content && (
               <Suspense fallback={<p>{streamingResponse.content}</p>}>
                 <MarkdownMessage content={streamingResponse.content} />
@@ -132,7 +135,7 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, on
             )}
           </article>
         )}
-        {busy && !streamingResponse?.reasoningContent && !streamingResponse?.content && !streamingResponse?.activities.length && (
+        {busy && !streamingResponse?.reasoningContent && !streamingResponse?.content && !streamingResponse?.activities.length && !streamingResponse?.approvals.length && (
           <div className="thinking-row" aria-label="正在思考">
             <span /><span /><span />
           </div>

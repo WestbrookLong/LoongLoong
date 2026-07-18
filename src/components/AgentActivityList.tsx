@@ -1,7 +1,7 @@
 import { CheckCircle2, FileSearch, FolderOpen, Globe2, LoaderCircle, Search, XCircle } from "lucide-react";
-import type { AgentActivityEvent } from "../types";
+import type { AgentToolEvent } from "../types";
 
-interface Props { activities: AgentActivityEvent[]; }
+interface Props { activities: AgentToolEvent[]; }
 
 const labels: Record<string, string> = {
   web_search: "搜索网页",
@@ -9,6 +9,10 @@ const labels: Record<string, string> = {
   filesystem_list: "查看文件",
   filesystem_read: "读取文件",
   filesystem_search: "搜索文件",
+  filesystem_write: "写入文件",
+  filesystem_replace: "修改文件",
+  filesystem_create_directory: "创建目录",
+  process_execute: "执行命令",
 };
 
 function ToolIcon({ tool }: { tool: string }) {
@@ -18,9 +22,9 @@ function ToolIcon({ tool }: { tool: string }) {
   return <FileSearch size={14} />;
 }
 
-function detail(activity: AgentActivityEvent) {
+function detail(activity: AgentToolEvent) {
   const args = activity.arguments || {};
-  return String(args.query || args.url || args.path || activity.result?.summary || "只读操作");
+  return String(args.query || args.url || args.path || args.executable || activity.result?.summary || "Agent 操作");
 }
 
 export function AgentActivityList({ activities }: Props) {

@@ -43,14 +43,20 @@ export default function App() {
   }, [notify]);
 
   useEffect(() => window.pet.onChatStream((event) => {
+    const agentEvent = event.agentEvent;
     setStreamingResponse((current) => current?.requestId === event.requestId
       ? {
         ...current,
         reasoningContent: current.reasoningContent + (event.reasoningContentDelta || ""),
         content: current.content + (event.contentDelta || ""),
-        activities: event.agentEvent
-          ? [...current.activities.filter((activity) => activity.tool_call_id !== event.agentEvent?.tool_call_id), event.agentEvent]
+        activities: agentEvent && ["tool_started", "tool_completed"].includes(agentEvent.type)
+          ? [...current.activities.filter((activity) => activity.tool_call_id !== (agentEvent as typeof current.activities[number]).tool_call_id), agentEvent as typeof current.activities[number]]
           : current.activities,
+        approvals: agentEvent?.type === "approval_required"
+          ? [...current.approvals.filter((approval) => approval.approval_id !== agentEvent.approval_id), agentEvent]
+          : agentEvent?.type === "approval_resolved"
+            ? current.approvals.filter((approval) => approval.approval_id !== agentEvent.approval_id)
+            : current.approvals,
       }
       : current);
   }), []);
@@ -75,7 +81,7 @@ export default function App() {
       created_at: new Date().toISOString(),
     };
     setMessages((current) => [...current, optimistic]);
-    setStreamingResponse({ requestId, reasoningContent: "", content: "", activities: [], startedAt: Date.now() });
+    setStreamingResponse({ requestId, reasoningContent: "", content: "", activities: [], approvals: [], startedAt: Date.now() });
     setBusy(true);
     try {
       const result = await window.pet.sendMessage({ requestId, text, modality, deep });
@@ -100,6 +106,15 @@ export default function App() {
   const cancel = useCallback(async () => {
     if (streamingResponse?.requestId) await window.pet.cancelChat(streamingResponse.requestId);
   }, [streamingResponse?.requestId]);
+
+  const resolveApproval = useCallback(async (approvalId: string, decision: "approve" | "deny", scope: "once" | "task" = "once", chooseDirectory = false) => {
+    if (!streamingResponse?.requestId) return;
+    try {
+      await window.pet.resolveAgentApproval({ requestId: streamingResponse.requestId, approvalId, decision, scope, chooseDirectory });
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), true);
+    }
+  }, [notify, streamingResponse?.requestId]);
 
   const voice = useVoiceConversation({
     autoSpeak: settings?.autoSpeak ?? true,
@@ -146,6 +161,7 @@ export default function App() {
             onSend={(text, deep) => send(text, "text", deep).then(() => undefined)}
             onMic={() => void voice.toggleManual()}
             onCancel={() => void cancel()}
+            onResolveApproval={(approvalId, decision, scope, chooseDirectory) => void resolveApproval(approvalId, decision, scope, chooseDirectory)}
           />
           <div className="dev-stats" aria-label="开发状态">
             <span><b>{dashboard.events}</b> 事件</span>

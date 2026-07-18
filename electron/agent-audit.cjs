@@ -1,14 +1,32 @@
 const crypto = require("node:crypto");
 const { isoNow } = require("./database.cjs");
 
-function createAgentAudit(db, { runId, sessionId, userMessageId, objective, limits }) {
+function redactText(value) {
+  return String(value).replace(/((?:api[_-]?key|token|password|secret)\s*[=:]\s*)[^\s"']+/gi, "$1[REDACTED]").slice(0, 4000);
+}
+
+function safeArguments(receipt) {
+  const args = { ...(receipt.arguments || {}) };
+  if (typeof args.content === "string") {
+    args.content = `[content omitted: ${args.content.length} chars, sha256=${crypto.createHash("sha256").update(args.content).digest("hex")}]`;
+  }
+  for (const key of ["old_text", "new_text"]) {
+    if (typeof args[key] === "string") args[key] = `[${key} omitted: ${args[key].length} chars]`;
+  }
+  if (Array.isArray(args.args)) args.args = args.args.map(redactText);
+  return args;
+}
+
+function createAgentAudit(db, { runId, sessionId, userMessageId, objective, limits, relatedTopicId = null, relatedOpenLoopId = null }) {
   const taskId = crypto.randomUUID();
   const now = isoNow();
   db.transaction(() => {
     db.db.run(
-      `INSERT INTO agent_tasks (id, session_id, user_message_id, objective, status, created_at, updated_at)
-       VALUES ($id, $sessionId, $messageId, $objective, 'running', $now, $now)`,
-      { $id: taskId, $sessionId: sessionId, $messageId: userMessageId, $objective: objective, $now: now },
+      `INSERT INTO agent_tasks
+       (id, session_id, user_message_id, objective, status, related_topic_id, related_open_loop_id, created_at, updated_at)
+       VALUES ($id, $sessionId, $messageId, $objective, 'running', $topicId, $openLoopId, $now, $now)`,
+      { $id: taskId, $sessionId: sessionId, $messageId: userMessageId, $objective: objective,
+        $topicId: relatedTopicId, $openLoopId: relatedOpenLoopId, $now: now },
     );
     db.db.run(
       `INSERT INTO agent_runs (id, task_id, session_id, status, limits_json, started_at)
@@ -40,16 +58,17 @@ function persistAgentResult(db, audit, result) {
         duration_ms: Number(toolResult.duration_ms || 0),
         truncated: Boolean(toolResult.truncated),
         provenance: toolResult.provenance || {},
+        approval_id: toolResult.approval_id || null,
         untrusted: toolResult.untrusted !== false,
       };
       db.db.run(
         `INSERT INTO tool_executions
-         (id, run_id, step_no, tool_call_id, tool_name, arguments_json, result_json, status, duration_ms, truncated, created_at)
-         VALUES ($id, $runId, $stepNo, $callId, $tool, $arguments, $result, $status, $duration, $truncated, $now)`,
+         (id, run_id, step_no, tool_call_id, tool_name, arguments_json, result_json, status, duration_ms, truncated, approval_id, created_at)
+         VALUES ($id, $runId, $stepNo, $callId, $tool, $arguments, $result, $status, $duration, $truncated, $approvalId, $now)`,
         { $id: crypto.randomUUID(), $runId: audit.runId, $stepNo: receipt.step, $callId: receipt.tool_call_id,
-          $tool: receipt.tool, $arguments: JSON.stringify(receipt.arguments || {}), $result: JSON.stringify(safeResult),
+          $tool: receipt.tool, $arguments: JSON.stringify(safeArguments(receipt)), $result: JSON.stringify(safeResult),
           $status: toolResult.ok ? "complete" : "failed", $duration: Number(toolResult.duration_ms || 0),
-          $truncated: toolResult.truncated ? 1 : 0, $now: now },
+          $truncated: toolResult.truncated ? 1 : 0, $approvalId: toolResult.approval_id || null, $now: now },
       );
     }
     db.db.run(
@@ -70,6 +89,8 @@ function failAgentAudit(db, audit, error, status = "failed") {
       { $id: audit.runId, $status: status, $error: String(error), $now: now });
     db.db.run("UPDATE agent_tasks SET status = $status, updated_at = $now, completed_at = $now WHERE id = $id",
       { $id: audit.taskId, $status: status, $now: now });
+    db.db.run("UPDATE approval_requests SET status = $status, resolved_at = $now WHERE run_id = $runId AND status = 'pending'",
+      { $runId: audit.runId, $status: status === "cancelled" ? "cancelled" : "interrupted", $now: now });
   });
 }
 

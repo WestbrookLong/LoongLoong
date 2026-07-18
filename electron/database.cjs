@@ -691,6 +691,44 @@ class PetDatabase {
         FOREIGN KEY (run_id) REFERENCES agent_runs(id)
       );
 
+      CREATE TABLE IF NOT EXISTS approval_requests (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        requested_path TEXT,
+        risk TEXT NOT NULL,
+        status TEXT NOT NULL,
+        request_json TEXT NOT NULL DEFAULT '{}',
+        response_json TEXT NOT NULL DEFAULT '{}',
+        requested_at TEXT NOT NULL,
+        resolved_at TEXT,
+        FOREIGN KEY (run_id) REFERENCES agent_runs(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS capability_grants (
+        id TEXT PRIMARY KEY,
+        root_path TEXT NOT NULL,
+        operations_json TEXT NOT NULL DEFAULT '["read"]',
+        scope TEXT NOT NULL,
+        allow_sensitive INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        expires_at TEXT,
+        revoked_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS policy_decisions (
+        id TEXT PRIMARY KEY,
+        run_id TEXT,
+        approval_id TEXT,
+        decision TEXT NOT NULL,
+        detail_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES agent_runs(id),
+        FOREIGN KEY (approval_id) REFERENCES approval_requests(id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_session_time ON messages(session_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_events_day_time ON events(journal_day_id, occurred_at);
       CREATE INDEX IF NOT EXISTS idx_events_activity ON events(activity_id);
@@ -701,6 +739,9 @@ class PetDatabase {
       CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_agent_steps_run ON agent_steps(run_id, step_no);
       CREATE INDEX IF NOT EXISTS idx_tool_executions_run ON tool_executions(run_id, step_no);
+      CREATE INDEX IF NOT EXISTS idx_approval_requests_run ON approval_requests(run_id, requested_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_capability_grants_status ON capability_grants(status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_policy_decisions_run ON policy_decisions(run_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_context_snapshots_session ON context_snapshots(session_id, source_end_rowid DESC);
       CREATE INDEX IF NOT EXISTS idx_extraction_runs_session ON memory_extraction_runs(session_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_event_sources_message ON event_sources(message_id);
@@ -729,6 +770,9 @@ class PetDatabase {
       if (!columns.includes(column)) this.db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     };
     ensureColumn("messages", "memory_processed_at", "TEXT");
+    ensureColumn("agent_tasks", "related_topic_id", "TEXT");
+    ensureColumn("agent_tasks", "related_open_loop_id", "TEXT");
+    ensureColumn("tool_executions", "approval_id", "TEXT");
     ensureColumn("events", "continuity_value", "REAL NOT NULL DEFAULT 0");
     ensureColumn("events", "continuity_score_version", "TEXT NOT NULL DEFAULT 'unknown-legacy'");
     ensureColumn("events", "continuity_components_json", "TEXT NOT NULL DEFAULT '{}'");
@@ -922,6 +966,10 @@ class PetDatabase {
       "UPDATE agent_tasks SET status = 'interrupted', completed_at = $now, updated_at = $now WHERE status = 'running'",
       { $now: now },
     );
+    this.db.run(
+      "UPDATE approval_requests SET status = 'interrupted', resolved_at = $now WHERE status = 'pending'",
+      { $now: now },
+    );
   }
 
   seed() {
@@ -947,6 +995,7 @@ class PetDatabase {
       agentWorkspaceRoot: process.cwd(),
       agentMaxSteps: "8",
       agentTimeoutSeconds: "300",
+      agentAllowedExecutables: "git,npm,npx,node,python",
       systemPrompt: "你是一个长期陪伴用户的 AI 宠物。你温暖、敏锐、诚实，会自然地使用记忆，但不会假装记得不存在的事情。",
     };
     const stamp = isoNow();
@@ -1066,7 +1115,7 @@ class PetDatabase {
     const stamp = isoNow();
     this.transaction(() => {
       for (const [key, value] of Object.entries(settings)) {
-        if (key === "apiKey" || key === "hasApiKey" || value === undefined) continue;
+        if (key === "apiKey" || key === "hasApiKey" || key === "agentDirectoryGrants" || value === undefined) continue;
         this.db.run(
           `INSERT INTO app_settings (key, value, updated_at) VALUES ($key, $value, $updatedAt)
            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,

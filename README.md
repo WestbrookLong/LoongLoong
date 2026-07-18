@@ -29,12 +29,15 @@ Pet keeps raw messages immutable and builds derived memory in separate layers:
 
 The development inspector exposes context snapshots, extraction runs, compaction runs, claims, evidence, and claim relations. Context and memory model settings are configurable independently from the chat model.
 
-## Read-only Agent
+## Agent
 
-Pet can run a bounded Agent loop through an isolated Python sidecar. The first phase exposes five read-only tools:
+Pet runs a bounded Agent loop through an isolated Python sidecar. It currently exposes:
 
-- `web_search` and `web_read`
+- `web_search` and `web_read`, with Bing-to-Baidu search fallback
 - `filesystem_list`, `filesystem_read`, and `filesystem_search`
+- atomic `filesystem_write` and exact `filesystem_replace`
+- single-directory `filesystem_create_directory`
+- structured `process_execute` without shell-string interpolation
 
 Install the sidecar dependencies before starting Pet:
 
@@ -44,7 +47,11 @@ python -m pip install -r python/requirements-agent.txt
 
 The browser runtime prefers the locally installed Microsoft Edge. If Edge is unavailable, install Playwright Chromium with `python -m playwright install chromium`.
 
-In Settings, enable **Read-only Agent** and choose the single workspace root it may inspect. Agent activity is streamed into the conversation, while task/run/tool receipts are available in the Logs inspector. File writes, shell commands, private-network browsing, downloads, credential files, links/reparse points, `.pet-data`, `.git`, and `node_modules` are not available in this phase.
+In Settings, enable **Agent mode** and choose the default workspace. Reads inside that workspace are automatic. Access to another directory, sensitive-path reads, every write, and every command require an approval card plus a native confirmation dialog. External read access can be granted once, for the current task, or persisted from Settings; writes and commands are never persisted. Activity, approvals, task/run/tool receipts, capability grants, and policy decisions are inspectable in Logs.
+
+Writes include a diff or proposed-content preview and use an expected-content hash plus temporary-file replacement. Commands use a configurable executable allowlist, structured argument arrays, a minimal environment, timeouts, and process-tree termination. This is an approval boundary, not an operating-system sandbox: only approve commands you understand.
+
+Private-network browsing, downloads, device/UNC paths, symlinks/reparse points, recursive directory creation, deletes, and moves remain blocked. Sensitive files require a separate explicit approval and cannot receive persistent grants.
 
 Example requests:
 
@@ -52,7 +59,19 @@ Example requests:
 List this project and explain its main modules.
 Search for every model API call in the workspace.
 Search the web for Playwright's current Python documentation, read the official page, and summarize it with sources.
+Read D:\another-project and compare its package.json with this project (approval required).
+Replace the exact version string in package.json (diff approval required).
+Run git status in the workspace (command approval required).
 ```
+
+For a packaged sidecar executable, install PyInstaller and build it before packaging Electron:
+
+```powershell
+python -m pip install pyinstaller
+npm run build:sidecar
+```
+
+At runtime Pet prefers `release/agent-sidecar/pet-agent.exe` in development and `resources/agent-sidecar/pet-agent.exe` in a packaged app. It falls back to the Python entry point during development.
 
 ## Run
 

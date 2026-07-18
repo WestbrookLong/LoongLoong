@@ -4,6 +4,10 @@ contextBridge.exposeInMainWorld("pet", {
   bootstrap: () => ipcRenderer.invoke("app:bootstrap"),
   sendMessage: (payload) => ipcRenderer.invoke("chat:send", payload),
   cancelChat: (requestId) => ipcRenderer.invoke("chat:cancel", requestId),
+  resolveAgentApproval: (payload) => ipcRenderer.invoke("agent:resolve-approval", payload),
+  agentRuntimeHealth: () => ipcRenderer.invoke("agent:runtime-health"),
+  addAgentDirectory: () => ipcRenderer.invoke("agent:add-directory"),
+  revokeAgentGrant: (id) => ipcRenderer.invoke("agent:revoke-grant", id),
   onChatStream: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("chat:stream", listener);

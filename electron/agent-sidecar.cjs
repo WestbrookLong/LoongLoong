@@ -1,4 +1,5 @@
 const path = require("node:path");
+const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 
 class AgentSidecar {
@@ -8,17 +9,29 @@ class AgentSidecar {
     this.readyPromise = null;
     this.runs = new Map();
     this.stdoutBuffer = "";
+    this.runtimeInfo = null;
+  }
+
+  launchTarget() {
+    const executableName = process.platform === "win32" ? "pet-agent.exe" : "pet-agent";
+    const bundledCandidates = [
+      path.join(process.resourcesPath || "", "agent-sidecar", executableName),
+      path.join(__dirname, "..", "release", "agent-sidecar", executableName),
+    ];
+    const bundled = bundledCandidates.find((candidate) => candidate && fs.existsSync(candidate));
+    if (bundled) return { executable: bundled, args: [], mode: "bundled" };
+    const script = path.join(__dirname, "..", "python", "pet_agent", "sidecar.py");
+    return { executable: process.env.PET_PYTHON || "python", args: ["-u", script], mode: "python" };
   }
 
   start() {
     if (this.readyPromise) return this.readyPromise;
     this.readyPromise = new Promise((resolve, reject) => {
-      const executable = process.env.PET_PYTHON || "python";
-      const script = path.join(__dirname, "..", "python", "pet_agent", "sidecar.py");
+      const target = this.launchTarget();
       const env = { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" };
       delete env.OPENAI_API_KEY;
       delete env.DASHSCOPE_API_KEY;
-      const child = spawn(executable, ["-u", script], {
+      const child = spawn(target.executable, target.args, {
         cwd: path.join(__dirname, ".."), env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
       });
       this.child = child;
@@ -35,6 +48,12 @@ class AgentSidecar {
             const event = JSON.parse(line);
             if (event.type === "ready") {
               clearTimeout(timer);
+              if (Number(event.protocol || 0) < 2) {
+                reject(new Error(`Agent sidecar protocol ${event.protocol} is no longer supported.`));
+                child.kill();
+                continue;
+              }
+              this.runtimeInfo = { ...event, mode: target.mode, executable: target.executable };
               resolve(event);
             }
             this.handleEvent(event);
@@ -53,6 +72,7 @@ class AgentSidecar {
         clearTimeout(timer);
         this.child = null;
         this.readyPromise = null;
+        this.runtimeInfo = null;
         for (const pending of this.runs.values()) pending.reject(new Error(`Agent sidecar exited (${code}).`));
         this.runs.clear();
       });
@@ -90,6 +110,15 @@ class AgentSidecar {
 
   cancel(runId) {
     if (this.child) this.send({ type: "cancel_run", run_id: runId });
+  }
+
+  resolveApproval(runId, approvalId, response) {
+    this.send({ type: "approval_resolve", run_id: runId, approval_id: approvalId, response });
+  }
+
+  async health() {
+    await this.start();
+    return { ok: true, ...this.runtimeInfo };
   }
 
   close() {

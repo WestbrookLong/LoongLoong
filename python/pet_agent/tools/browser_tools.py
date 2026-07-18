@@ -24,7 +24,41 @@ class BingRssSearchProvider:
         })).filter(item => item.title && /^https?:\/\//i.test(item.url))""", max_results)
         if not items:
             raise RuntimeError("Bing returned no readable search results.")
-        return url, items
+        return self.name, url, items
+
+
+class BaiduSearchProvider:
+    name = "baidu"
+
+    async def search(self, page, query: str, max_results: int):
+        url = f"https://www.baidu.com/s?wd={quote_plus(query)}&rn={max_results}"
+        response = await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        if response and response.status >= 400:
+            raise RuntimeError(f"Baidu returned HTTP {response.status}")
+        items = await page.locator("#content_left .result, #content_left .c-container").evaluate_all(r"""(nodes, limit) => nodes.slice(0, limit).map(node => {
+          const a = node.querySelector('h3 a');
+          const snippet = node.querySelector('.c-abstract, .content-right_8Zs40, .c-span-last');
+          return a ? { title: (a.textContent || '').trim(), url: a.href, snippet: (snippet?.textContent || '').replace(/\s+/g, ' ').trim() } : null;
+        }).filter(item => item && item.title && /^https?:\/\//i.test(item.url))""", max_results)
+        if not items:
+            raise RuntimeError("Baidu returned no readable search results.")
+        return self.name, url, items
+
+
+class FallbackSearchProvider:
+    name = "automatic"
+
+    def __init__(self, providers=None) -> None:
+        self.providers = providers or [BingRssSearchProvider(), BaiduSearchProvider()]
+
+    async def search(self, page, query: str, max_results: int):
+        errors = []
+        for provider in self.providers:
+            try:
+                return await provider.search(page, query, max_results)
+            except Exception as exc:
+                errors.append(f"{provider.name}: {exc}")
+        raise RuntimeError("All web search providers failed: " + "; ".join(errors))
 
 
 class BrowserTools:
@@ -32,7 +66,7 @@ class BrowserTools:
         self._playwright = None
         self._browser = None
         self._lock = asyncio.Lock()
-        self.search_provider = search_provider or BingRssSearchProvider()
+        self.search_provider = search_provider or FallbackSearchProvider()
 
     async def _ensure_browser(self):
         async with self._lock:
@@ -64,7 +98,7 @@ class BrowserTools:
             accept_downloads=False,
             java_script_enabled=True,
             locale="zh-CN",
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36 PetReadOnlyAgent/1.0",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36 PetAgent/2.0",
         )
 
         async def guard(route, request):
@@ -85,9 +119,9 @@ class BrowserTools:
         context = await self._context()
         try:
             page = await context.new_page()
-            search_url, items = await self.search_provider.search(page, query, max_results)
-            return ToolResult(True, "web_search", f"Found {len(items)} {self.search_provider.name} search results.", {
-                "query": query, "engine": self.search_provider.name, "results": items,
+            engine, search_url, items = await self.search_provider.search(page, query, max_results)
+            return ToolResult(True, "web_search", f"Found {len(items)} {engine} search results.", {
+                "query": query, "engine": engine, "results": items,
             }, provenance={"url": search_url, "accessed_at": datetime.now(timezone.utc).isoformat()})
         finally:
             await context.close()
@@ -103,6 +137,9 @@ class BrowserTools:
             await page.wait_for_timeout(500)
             final_url = page.url
             await validate_public_url(final_url)
+            content_type = (response.headers.get("content-type", "") if response else "").lower()
+            if content_type and not any(item in content_type for item in ("text/html", "application/xhtml", "text/plain")):
+                raise RuntimeError(f"Unsupported page content type: {content_type}")
             extracted = await page.evaluate(r"""() => {
               const clone = document.cloneNode(true);
               clone.querySelectorAll('script,style,noscript,svg,canvas,nav,header,footer,aside,form,dialog').forEach(node => node.remove());
@@ -116,6 +153,13 @@ class BrowserTools:
             truncated = len(text) > max_chars
             extracted["text"] = text[:max_chars]
             extracted["url"] = final_url
+            extracted["contentType"] = content_type
+            redirect_chain = []
+            request = response.request if response else None
+            while request:
+                redirect_chain.append(request.url)
+                request = request.redirected_from
+            extracted["redirectChain"] = list(reversed(redirect_chain))
             return ToolResult(True, "web_read", f"Read {extracted.get('title') or final_url}.", extracted,
                               truncated=truncated, provenance={"url": final_url, "accessed_at": datetime.now(timezone.utc).isoformat()})
         finally:

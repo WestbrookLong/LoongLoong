@@ -1,7 +1,7 @@
 const path = require("node:path");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
-const { app, BrowserWindow, ipcMain, nativeTheme, safeStorage, session, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, session, shell } = require("electron");
 const { PetDatabase, isoNow, localDate } = require("./database.cjs");
 const { captureUserTurn, retrieveMemory } = require("./memory.cjs");
 const {
@@ -22,11 +22,13 @@ const { persistEvaluationRun, recordContinuityFeedback, searchProfiles } = requi
 const { promoteContinuityProfile, stageContinuityProfile } = require("./continuity-profiles.cjs");
 const { AgentSidecar } = require("./agent-sidecar.cjs");
 const { createAgentAudit, failAgentAudit, persistAgentResult } = require("./agent-audit.cjs");
+const { activeGrants, addPersistentReadGrant, recordApprovalRequest, resolveApprovalRequest, revokeGrant } = require("./approval-broker.cjs");
 
 let mainWindow;
 let db;
 let scheduledTimer;
 let memoryJobQueue = Promise.resolve();
+const pendingApprovals = new Map();
 const agentSidecar = new AgentSidecar({
   onLog(level, message, context) {
     db?.log(level, "agent", message, context);
@@ -124,6 +126,7 @@ function publicSettings() {
     ...currentSettings,
     autoSpeak: settings.autoSpeak === "true",
     agentEnabled: settings.agentEnabled === "true",
+    agentDirectoryGrants: activeGrants(db),
     hasApiKey: Boolean(getApiKey()),
   };
 }
@@ -158,11 +161,13 @@ function dashboard() {
     agentTasks: count("agent_tasks"),
     agentRuns: count("agent_runs"),
     toolExecutions: count("tool_executions"),
+    approvals: count("approval_requests"),
+    capabilityGrants: count("capability_grants", "WHERE status = 'active'"),
     databasePath: db.filePath,
   };
 }
 
-async function agentCompletion({ requestId, settings, apiKey, messages, sessionId, userMessage, text, onDelta }) {
+async function agentCompletion({ requestId, settings, apiKey, messages, sessionId, userMessage, text, onDelta, relatedTopicId, relatedOpenLoopId }) {
   const runId = String(requestId || crypto.randomUUID());
   const limits = {
     maxSteps: Math.min(12, Math.max(1, Number(settings.agentMaxSteps) || 8)),
@@ -174,6 +179,8 @@ async function agentCompletion({ requestId, settings, apiKey, messages, sessionI
     userMessageId: userMessage.id,
     objective: text,
     limits,
+    relatedTopicId,
+    relatedOpenLoopId,
   });
   try {
     const result = await agentSidecar.run(runId, {
@@ -182,6 +189,8 @@ async function agentCompletion({ requestId, settings, apiKey, messages, sessionI
       model: settings.chatModel,
       temperature: Number(settings.temperature || 0.7),
       workspace_root: String(settings.agentWorkspaceRoot || process.cwd()),
+      grants: activeGrants(db),
+      allowed_executables: String(settings.agentAllowedExecutables || "git,npm,npx,node,python").split(",").map((item) => item.trim()).filter(Boolean),
       max_steps: limits.maxSteps,
       timeout_seconds: limits.timeoutSeconds,
       messages,
@@ -192,12 +201,25 @@ async function agentCompletion({ requestId, settings, apiKey, messages, sessionI
         onDelta?.({ reasoningContentDelta: "", contentDelta: event.text || "" });
       } else if (["tool_started", "tool_completed"].includes(event.type)) {
         onDelta?.({ reasoningContentDelta: "", contentDelta: "", agentEvent: event });
+      } else if (event.type === "approval_required") {
+        pendingApprovals.set(event.approval_id, { runId, request: event });
+        recordApprovalRequest(db, runId, event);
+        db.run("UPDATE agent_runs SET status = 'awaiting_approval' WHERE id = $id", { $id: runId });
+        db.run("UPDATE agent_tasks SET status = 'awaiting_approval', updated_at = $now WHERE id = $id", { $id: audit.taskId, $now: isoNow() });
+        onDelta?.({ reasoningContentDelta: "", contentDelta: "", agentEvent: event });
+      } else if (event.type === "approval_resolved") {
+        pendingApprovals.delete(event.approval_id);
+        db.run("UPDATE agent_runs SET status = 'running' WHERE id = $id", { $id: runId });
+        db.run("UPDATE agent_tasks SET status = 'running', updated_at = $now WHERE id = $id", { $id: audit.taskId, $now: isoNow() });
+        onDelta?.({ reasoningContentDelta: "", contentDelta: "", agentEvent: event });
       }
     });
     persistAgentResult(db, audit, result);
+    for (const [id, pending] of pendingApprovals) if (pending.runId === runId) pendingApprovals.delete(id);
     return { ...result, offline: false, agentRunId: runId };
   } catch (error) {
     failAgentAudit(db, audit, error.message || error, error.code === "AGENT_CANCELLED" ? "cancelled" : "failed");
+    for (const [id, pending] of pendingApprovals) if (pending.runId === runId) pendingApprovals.delete(id);
     throw error;
   }
 }
@@ -383,16 +405,19 @@ async function handleChat(payload, onDelta = null) {
     content: message.content,
   }));
   const snapshotBlock = sessionContextBlock(preparedContext?.snapshot);
+  const taskTerms = String(text).toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) || [];
   const recentAgentTasks = settings.agentEnabled
     ? db.all(
-      `SELECT objective, summary_json, completed_at FROM agent_tasks
-       WHERE session_id = $sessionId AND status = 'complete'
-       ORDER BY completed_at DESC LIMIT 6`,
-      { $sessionId: sessionRow.id },
-    ).reverse()
+      `SELECT objective, summary_json, completed_at, session_id FROM agent_tasks
+       WHERE status = 'complete' ORDER BY completed_at DESC LIMIT 80`,
+    ).map((task, index) => {
+      const haystack = `${task.objective} ${task.summary_json}`.toLowerCase();
+      const lexical = taskTerms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
+      return { ...task, score: lexical * 3 + (task.session_id === sessionRow.id ? 2 : 0) + Math.max(0, 1 - index / 80) };
+    }).filter((task) => task.score >= 1.5).sort((a, b) => b.score - a.score).slice(0, 6).reverse()
     : [];
   const taskMemory = recentAgentTasks.length
-    ? `\n[最近只读 Agent 任务摘要]\n${recentAgentTasks.map((task) => {
+    ? `\n[相关 Agent 任务摘要]\n${recentAgentTasks.map((task) => {
       let summary = {};
       try { summary = JSON.parse(task.summary_json || "{}"); } catch {}
       return `- 任务：${task.objective}\n  结果摘要：${String(summary.summary || "").slice(0, 1000)}`;
@@ -412,6 +437,8 @@ async function handleChat(payload, onDelta = null) {
         userMessage,
         text,
         onDelta,
+        relatedTopicId: continuity.topicId || null,
+        relatedOpenLoopId: continuity.openLoopIds?.[0] || null,
       })
       : await chatCompletion({ settings, apiKey, messages: modelMessages, onDelta });
     const assistantMessage = db.addMessage({
@@ -513,6 +540,18 @@ function records({ type, search = "", limit = 200 } = {}) {
     },
     tool_executions: {
       sql: `SELECT * FROM tool_executions WHERE tool_name LIKE $query OR arguments_json LIKE $query OR result_json LIKE $query
+            ORDER BY created_at DESC LIMIT $limit`,
+    },
+    approval_requests: {
+      sql: `SELECT * FROM approval_requests WHERE tool_name LIKE $query OR requested_path LIKE $query OR status LIKE $query
+            ORDER BY requested_at DESC LIMIT $limit`,
+    },
+    capability_grants: {
+      sql: `SELECT * FROM capability_grants WHERE root_path LIKE $query OR status LIKE $query
+            ORDER BY created_at DESC LIMIT $limit`,
+    },
+    policy_decisions: {
+      sql: `SELECT * FROM policy_decisions WHERE decision LIKE $query OR detail_json LIKE $query
             ORDER BY created_at DESC LIMIT $limit`,
     },
     retrievals: {
@@ -666,6 +705,73 @@ function registerIpc() {
   ipcMain.handle("chat:cancel", (_event, requestId) => {
     agentSidecar.cancel(String(requestId || ""));
     return { cancelled: true };
+  });
+  ipcMain.handle("agent:runtime-health", () => agentSidecar.health());
+  ipcMain.handle("agent:add-directory", async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "选择允许 Agent 读取的目录",
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (result.canceled || !result.filePaths[0]) return { cancelled: true, grants: activeGrants(db) };
+    addPersistentReadGrant(db, result.filePaths[0]);
+    return { cancelled: false, grants: activeGrants(db) };
+  });
+  ipcMain.handle("agent:revoke-grant", (_event, id) => {
+    revokeGrant(db, String(id || ""));
+    return { grants: activeGrants(db) };
+  });
+  ipcMain.handle("agent:resolve-approval", async (_event, payload) => {
+    const approvalId = String(payload?.approvalId || "");
+    const pending = pendingApprovals.get(approvalId);
+    if (!pending || pending.runId !== String(payload?.requestId || "")) throw new Error("审批请求已失效。");
+    if (pending.resolving) throw new Error("审批请求正在处理。");
+    pending.resolving = true;
+    try {
+    const request = pending.request;
+    let decision = payload?.decision === "approve" ? "approve" : "deny";
+    let rootPath = request.suggested_root || request.requested_path;
+    if (decision === "approve" && payload?.chooseDirectory && request.resource_kind === "path") {
+      const selected = await dialog.showOpenDialog(mainWindow, {
+        title: "选择本次授权目录",
+        defaultPath: rootPath,
+        properties: ["openDirectory"],
+      });
+      if (selected.canceled || !selected.filePaths[0]) decision = "deny";
+      else rootPath = selected.filePaths[0];
+    }
+    if (decision === "approve") {
+      const commandText = request.command
+        ? `${request.command.executable} ${(request.command.args || []).join(" ")}\n工作目录：${request.command.cwd}`
+        : `${request.operation}\n${request.requested_path}`;
+      const confirmation = await dialog.showMessageBox(mainWindow, {
+        type: request.risk === "high" ? "warning" : "question",
+        title: "确认 Agent 权限",
+        message: request.sensitive ? "该操作可能读取或修改敏感数据" : "确认允许 Agent 执行此操作？",
+        detail: `${commandText}\n\n${request.reason || ""}`,
+        buttons: ["取消", "批准"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      if (confirmation.response !== 1) decision = "deny";
+    }
+    const oneShotOnly = request.operation === "write" || request.operation === "execute";
+    const scope = oneShotOnly ? "once" : payload?.scope === "task" ? "task" : "once";
+    const response = {
+      decision,
+      root_path: rootPath,
+      scope,
+      allow_sensitive: decision === "approve" && Boolean(request.sensitive),
+      expires_at: Date.now() / 1000 + (scope === "task" ? 1800 : 300),
+    };
+    resolveApprovalRequest(db, pending.runId, approvalId, response);
+    agentSidecar.resolveApproval(pending.runId, approvalId, response);
+    pendingApprovals.delete(approvalId);
+    return { resolved: true, decision };
+    } catch (error) {
+      if (pendingApprovals.get(approvalId) === pending) pending.resolving = false;
+      throw error;
+    }
   });
   ipcMain.handle("chat:new", () => createSession());
   ipcMain.handle("app:open-external", async (_event, value) => {

@@ -41,6 +41,8 @@ export interface Settings {
   agentWorkspaceRoot: string;
   agentMaxSteps: string;
   agentTimeoutSeconds: string;
+  agentAllowedExecutables: string;
+  agentDirectoryGrants: DirectoryGrant[];
   systemPrompt: string;
   hasApiKey: boolean;
   apiKey?: string;
@@ -69,6 +71,8 @@ export interface Dashboard {
   agentTasks: number;
   agentRuns: number;
   toolExecutions: number;
+  approvals: number;
+  capabilityGrants: number;
   databasePath: string;
 }
 
@@ -95,10 +99,10 @@ export interface ChatStreamEvent {
   requestId: string;
   reasoningContentDelta?: string;
   contentDelta?: string;
-  agentEvent?: AgentActivityEvent;
+  agentEvent?: AgentEvent;
 }
 
-export interface AgentActivityEvent {
+export interface AgentToolEvent {
   type: "tool_started" | "tool_completed";
   step: number;
   tool_call_id: string;
@@ -113,12 +117,51 @@ export interface AgentActivityEvent {
   };
 }
 
+export interface AgentApprovalEvent {
+  type: "approval_required" | "approval_resolved";
+  approval_id: string;
+  step?: number;
+  tool_call_id?: string;
+  tool?: string;
+  operation?: string;
+  risk?: "medium" | "high";
+  resource_kind?: "path" | "command";
+  requested_path?: string;
+  suggested_root?: string;
+  sensitive?: boolean;
+  reason?: string;
+  preview?: {
+    path?: string;
+    kind?: string;
+    diff?: string;
+    diff_truncated?: boolean;
+    proposed_chars?: number;
+    existing_content_unavailable?: boolean;
+    proposed_preview?: string;
+    proposed_preview_truncated?: boolean;
+  };
+  command?: { executable: string; args: string[]; cwd: string; signature: string };
+  decision?: string;
+}
+
+export type AgentEvent = AgentToolEvent | AgentApprovalEvent;
+
+export interface DirectoryGrant {
+  id: string;
+  root_path: string;
+  operations: string[];
+  scope: string;
+  allow_sensitive: boolean;
+  expires_at?: string | null;
+}
+
 export interface StreamingResponse {
   requestId: string;
   reasoningContent: string;
   content: string;
   startedAt: number;
-  activities: AgentActivityEvent[];
+  activities: AgentToolEvent[];
+  approvals: AgentApprovalEvent[];
 }
 
 export interface VoicePayload {
@@ -130,6 +173,10 @@ export interface PetApi {
   bootstrap(): Promise<Bootstrap>;
   sendMessage(payload: { requestId: string; text: string; modality: "text" | "voice"; deep?: boolean }): Promise<ChatResult>;
   cancelChat(requestId: string): Promise<{ cancelled: boolean }>;
+  resolveAgentApproval(payload: { requestId: string; approvalId: string; decision: "approve" | "deny"; scope?: "once" | "task"; chooseDirectory?: boolean }): Promise<{ resolved: boolean; decision: string }>;
+  agentRuntimeHealth(): Promise<{ ok: boolean; runtime_version: string; protocol: number; mode: string; capabilities: string[] }>;
+  addAgentDirectory(): Promise<{ cancelled: boolean; grants: DirectoryGrant[] }>;
+  revokeAgentGrant(id: string): Promise<{ grants: DirectoryGrant[] }>;
   onChatStream(callback: (event: ChatStreamEvent) => void): () => void;
   newChat(): Promise<{ session: Session; messages: Message[] }>;
   transcribe(payload: VoicePayload): Promise<{ text: string }>;

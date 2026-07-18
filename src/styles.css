@@ -343,6 +343,16 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .agent-activity.running > svg:first-child, .agent-activity.running > svg:last-child { color: var(--teal); }
 .agent-activity.complete > svg:last-child { color: var(--teal); }
 .agent-activity.failed > svg:last-child { color: var(--coral); }
+.agent-approvals { display: grid; gap: 9px; margin: 0 0 15px; }
+.agent-approval { padding: 12px; border: 1px solid var(--amber); border-radius: 7px; background: color-mix(in srgb, var(--amber) 8%, var(--surface)); }
+.agent-approval.high-risk { border-color: var(--coral); background: color-mix(in srgb, var(--coral) 8%, var(--surface)); }
+.agent-approval header { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; color: var(--ink); font-size: 12px; }
+.agent-approval code, .agent-approval pre { display: block; max-height: 220px; overflow: auto; margin: 0 0 8px; padding: 8px; color: var(--code-text); border-radius: 5px; background: var(--code-background); font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-approval p { margin: 6px 0 9px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.agent-approval .approval-diff { max-height: 280px; }
+.approval-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.approval-actions button { display: inline-flex; min-height: 30px; align-items: center; gap: 5px; padding: 0 9px; color: var(--secondary-text); border: 1px solid var(--line); border-radius: 5px; background: var(--surface); cursor: pointer; font-size: 11px; }
+.approval-actions button.primary { color: var(--canvas); border-color: var(--teal); background: var(--teal); }
 
 .reasoning-panel { margin: 0 0 13px; color: var(--muted); border-left: 2px solid var(--line); }
 .reasoning-panel.active { border-left-color: var(--teal); }
@@ -477,6 +487,16 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .check-field { justify-content: flex-end; margin-bottom: 16px !important; }
 .settings-form h2 { display: flex; align-items: center; gap: 7px; }
 .agent-toggle-field { min-height: 38px; align-items: center; justify-content: flex-start; flex-direction: row !important; gap: 8px !important; }
+.runtime-health { display: flex; align-items: center; gap: 7px; margin: 14px 0; padding: 9px 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; font-size: 11px; }
+.runtime-health.healthy svg { color: var(--teal); }
+.runtime-health.unhealthy svg { color: var(--coral); }
+.grant-heading { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 8px; color: var(--secondary-text); font-size: 12px; font-weight: 600; }
+.grant-heading .secondary-button { min-height: 30px; }
+.grant-list { display: grid; gap: 6px; margin-bottom: 16px; }
+.grant-item { display: grid; grid-template-columns: minmax(0, 1fr) 32px; align-items: center; gap: 7px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-muted); }
+.grant-item code { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.grant-item button { display: grid; width: 28px; height: 28px; place-items: center; padding: 0; color: var(--muted); border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.grant-item button:hover { color: var(--coral); background: var(--surface-hover); }
 .settings-actions { display: flex; justify-content: flex-end; gap: 10px; }
 
 .toast { position: fixed; z-index: 20; right: 22px; bottom: 22px; display: flex; max-width: min(440px, calc(100vw - 44px)); min-height: 44px; align-items: center; gap: 9px; padding: 10px 13px; border: 1px solid var(--line); border-radius: 6px; color: #fff; background: #292926; box-shadow: 0 10px 34px rgba(0,0,0,.18); font-size: 13px; }

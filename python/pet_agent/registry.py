@@ -77,12 +77,12 @@ class ToolRegistry:
                     return f"{key} must be at most {rule['maximum']}"
         return None
 
-    async def dispatch(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+    async def dispatch(self, name: str, arguments: dict[str, Any], *, approved: bool = False) -> ToolResult:
         started = time.monotonic()
         entry = self._tools.get(name)
         if not entry or not entry.enabled:
             return ToolResult(False, name, "Tool is not available.", error=f"Unknown tool: {name}")
-        if entry.risk != "read" or not entry.auto_execute:
+        if (entry.risk != "read" or not entry.auto_execute) and not approved:
             return ToolResult(False, name, "Tool requires approval and cannot run in read-only mode.", error="approval_required")
         validation_error = self._validate(entry.parameters, arguments)
         if validation_error:

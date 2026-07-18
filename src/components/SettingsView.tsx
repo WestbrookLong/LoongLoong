@@ -1,4 +1,4 @@
-import { Bot, Check, KeyRound, Moon, PlugZap, Save } from "lucide-react";
+import { Activity, Bot, Check, FolderPlus, KeyRound, Moon, PlugZap, Save, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { applyThemeMode, normalizeThemeMode } from "../theme";
 import type { Settings } from "../types";
@@ -13,9 +13,15 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
   const [form, setForm] = useState<Settings>({ ...settings, apiKey: "" });
   const [busy, setBusy] = useState(false);
   const [tested, setTested] = useState(false);
+  const [runtime, setRuntime] = useState<{ ok: boolean; runtime_version?: string; mode?: string; error?: string } | null>(null);
 
   useEffect(() => setForm({ ...settings, apiKey: "" }), [settings]);
   useEffect(() => () => applyThemeMode(settings.themeMode), [settings.themeMode]);
+  useEffect(() => {
+    window.pet.agentRuntimeHealth()
+      .then((result) => setRuntime(result))
+      .catch((error) => setRuntime({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+  }, []);
 
   const update = (key: keyof Settings, value: string | boolean) => {
     setTested(false);
@@ -46,6 +52,16 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const addDirectory = async () => {
+    const result = await window.pet.addAgentDirectory();
+    setForm((current) => ({ ...current, agentDirectoryGrants: result.grants }));
+  };
+
+  const revokeDirectory = async (id: string) => {
+    const result = await window.pet.revokeAgentGrant(id);
+    setForm((current) => ({ ...current, agentDirectoryGrants: result.grants }));
   };
 
   return (
@@ -92,7 +108,28 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
               <input type="number" min="30" max="600" step="30" value={form.agentTimeoutSeconds} onChange={(event) => update("agentTimeoutSeconds", event.target.value)} />
             </label>
           </div>
-          <p className="setting-hint">Agent 只能列出、搜索和读取这个工作区里的普通文本文件，以及搜索和读取公网网页。密钥、隐藏数据目录、链接跳转、文件写入和命令执行均被阻止。</p>
+          <p className="setting-hint">工作区内普通读取可自动执行；外部目录、敏感内容、每次文件写入和每条命令都会暂停并要求人工审批。读取授权不会自动升级为写入或执行权限。</p>
+          <div className={`runtime-health ${runtime?.ok ? "healthy" : "unhealthy"}`}>
+            <Activity size={15} />
+            {runtime === null ? "正在检查 Agent Runtime…" : runtime.ok ? `Runtime ${runtime.runtime_version} · ${runtime.mode}` : `Runtime 不可用：${runtime.error}`}
+          </div>
+          <label>
+            <span>允许执行的程序</span>
+            <input value={form.agentAllowedExecutables} onChange={(event) => update("agentAllowedExecutables", event.target.value)} placeholder="git,npm,npx,node,python" />
+          </label>
+          <div className="grant-heading">
+            <span>持久读取授权</span>
+            <button type="button" className="secondary-button" onClick={() => void addDirectory()}><FolderPlus size={15} />添加目录</button>
+          </div>
+          <div className="grant-list">
+            {form.agentDirectoryGrants.length === 0 && <p className="setting-hint">暂无额外目录；运行时也可以按任务临时审批。</p>}
+            {form.agentDirectoryGrants.map((grant) => (
+              <div className="grant-item" key={grant.id}>
+                <code title={grant.root_path}>{grant.root_path}</code>
+                <button type="button" title="撤销授权" onClick={() => void revokeDirectory(grant.id)}><Trash2 size={14} /></button>
+              </div>
+            ))}
+          </div>
         </section>
 
         <section>

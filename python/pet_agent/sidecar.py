@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import traceback
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -16,12 +17,24 @@ if hasattr(sys.stderr, "reconfigure"):
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from pet_agent.approvals import ApprovalInbox
     from pet_agent.runtime import AgentCancelled, AgentRuntime
 else:
+    from .approvals import ApprovalInbox
     from .runtime import AgentCancelled, AgentRuntime
 
 WRITE_LOCK = threading.Lock()
-RUNS: dict[str, threading.Event] = {}
+PROTOCOL_VERSION = 2
+RUNTIME_VERSION = "2.0.0"
+
+
+@dataclass
+class RunState:
+    cancel: threading.Event = field(default_factory=threading.Event)
+    approvals: ApprovalInbox = field(default_factory=ApprovalInbox)
+
+
+RUNS: dict[str, RunState] = {}
 
 
 def emit(message: dict[str, Any]) -> None:
@@ -30,10 +43,10 @@ def emit(message: dict[str, Any]) -> None:
         sys.stdout.flush()
 
 
-def run_worker(run_id: str, payload: dict[str, Any], cancel: threading.Event) -> None:
+def run_worker(run_id: str, payload: dict[str, Any], state: RunState) -> None:
     try:
         emit({"type": "run_started", "run_id": run_id})
-        runtime = AgentRuntime(payload, lambda event: emit({"run_id": run_id, **event}), cancel)
+        runtime = AgentRuntime(payload, lambda event: emit({"run_id": run_id, **event}), state.cancel, state.approvals)
         result = asyncio.run(runtime.run())
         emit({"type": "run_completed", "run_id": run_id, "result": result})
     except AgentCancelled as exc:
@@ -46,7 +59,11 @@ def run_worker(run_id: str, payload: dict[str, Any], cancel: threading.Event) ->
 
 
 def main() -> None:
-    emit({"type": "ready", "pid": os.getpid(), "protocol": 1})
+    emit({
+        "type": "ready", "pid": os.getpid(), "protocol": PROTOCOL_VERSION,
+        "runtime_version": RUNTIME_VERSION,
+        "capabilities": ["approvals", "external_read", "filesystem_write", "process_execute", "web_fallback"],
+    })
     for raw in sys.stdin:
         try:
             message = json.loads(raw)
@@ -58,15 +75,19 @@ def main() -> None:
                 if run_id in RUNS:
                     emit({"type": "run_failed", "run_id": run_id, "error": "Run already exists."})
                     continue
-                cancel = threading.Event()
-                RUNS[run_id] = cancel
-                threading.Thread(target=run_worker, args=(run_id, message["payload"], cancel), daemon=True).start()
+                state = RunState()
+                RUNS[run_id] = state
+                threading.Thread(target=run_worker, args=(run_id, message["payload"], state), daemon=True).start()
             elif kind == "cancel_run":
-                if event := RUNS.get(str(message.get("run_id"))):
-                    event.set()
+                if state := RUNS.get(str(message.get("run_id"))):
+                    state.cancel.set()
+                    state.approvals.resolve(str(message.get("approval_id") or ""), {"decision": "cancelled"})
+            elif kind == "approval_resolve":
+                if state := RUNS.get(str(message.get("run_id"))):
+                    state.approvals.resolve(str(message.get("approval_id")), dict(message.get("response") or {}))
             elif kind == "shutdown":
-                for event in RUNS.values():
-                    event.set()
+                for state in RUNS.values():
+                    state.cancel.set()
                 break
         except Exception as exc:
             emit({"type": "protocol_error", "error": str(exc)})
