@@ -25,6 +25,7 @@ const { AgentSidecar } = require("./agent-sidecar.cjs");
 const { createAgentAudit, failAgentAudit, persistAgentResult } = require("./agent-audit.cjs");
 const { activeGrants, addPersistentReadGrant, recordApprovalRequest, resolveApprovalRequest, revokeGrant } = require("./approval-broker.cjs");
 const { processEmbeddingJobs, reconcileEmbeddingIndex } = require("./embedding.cjs");
+const { discoverClaimNeighbors, processClaimNeighborCandidates } = require("./claim-semantic.cjs");
 
 let mainWindow;
 let db;
@@ -141,6 +142,7 @@ function publicSettings() {
     remoteEmbeddingConsent: settings.remoteEmbeddingConsent === "true",
     hybridRetrievalEnabled: settings.hybridRetrievalEnabled === "true",
     rerankerEnabled: settings.rerankerEnabled === "true",
+    claimSemanticGovernanceEnabled: settings.claimSemanticGovernanceEnabled === "true",
     agentDirectoryGrants: activeGrants(db),
     hasApiKey: Boolean(getApiKey()),
   };
@@ -181,6 +183,7 @@ function dashboard() {
     capabilityGrants: count("capability_grants", "WHERE status = 'active'"),
     embeddings: count("memory_embeddings", "WHERE status = 'ready'"),
     embeddingJobs: count("embedding_jobs", "WHERE status IN ('pending', 'running', 'failed')"),
+    claimNeighborCandidates: count("claim_neighbor_candidates", "WHERE status IN ('pending_model', 'pending_review', 'failed')"),
     databasePath: db.filePath,
   };
 }
@@ -763,6 +766,14 @@ function records({ type, search = "", limit = 200 } = {}) {
       sql: `SELECT * FROM reranker_profiles WHERE id LIKE $query OR model LIKE $query OR status LIKE $query
             ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at DESC LIMIT $limit`,
     },
+    claim_neighbor_candidates: {
+      sql: `SELECT n.*, a.canonical_text AS claim_a_text, b.canonical_text AS claim_b_text
+            FROM claim_neighbor_candidates n
+            JOIN memory_claims a ON a.id = n.claim_a_id JOIN memory_claims b ON b.id = n.claim_b_id
+            WHERE n.status LIKE $query OR COALESCE(n.relation, '') LIKE $query
+               OR a.canonical_text LIKE $query OR b.canonical_text LIKE $query
+            ORDER BY n.updated_at DESC LIMIT $limit`,
+    },
   };
   const definition = definitions[type];
   if (!definition) throw new Error("未知的数据表类型。");
@@ -910,6 +921,13 @@ function registerIpc() {
     const result = await processEmbeddingJobs({ db, settings: db.getSettings(), apiKey: getApiKey(), limit: 100 });
     return { queued, ...result };
   }, false));
+  ipcMain.handle("memory:scan-claim-neighbors", () => enqueueMemoryJob(async () => {
+    const settings = publicSettings();
+    const candidateIds = discoverClaimNeighbors(db);
+    const adjudications = hasModelAccess(settings, getApiKey())
+      ? await processClaimNeighborCandidates({ db, settings, apiKey: getApiKey(), limit: 5 }) : [];
+    return { candidateIds, adjudications };
+  }, false));
   ipcMain.handle("continuity:evaluate", () => {
     const fixtureDirectory = path.join(process.cwd(), "tests", "fixtures");
     const dataset = {
@@ -963,8 +981,18 @@ function startEmbeddingScheduler() {
   const check = () => enqueueMemoryJob(async () => {
     const queued = reconcileEmbeddingIndex(db);
     const result = await processEmbeddingJobs({ db, settings: db.getSettings(), apiKey: getApiKey(), limit: 20 });
+    const settings = publicSettings();
+    let claimCandidates = 0;
+    let claimAdjudications = [];
+    if (settings.claimSemanticGovernanceEnabled && result.failed === 0) {
+      claimCandidates = discoverClaimNeighbors(db).length;
+      if (hasModelAccess(settings, getApiKey())) {
+        claimAdjudications = await processClaimNeighborCandidates({ db, settings, apiKey: getApiKey(), limit: 1 });
+      }
+    }
     if (queued || result.processed || result.failed) {
-      db.log(result.failed ? "warn" : "info", "embedding", "Embedding index reconciliation completed.", { queued, ...result });
+      db.log(result.failed ? "warn" : "info", "embedding", "Embedding index reconciliation completed.",
+        { queued, ...result, claimCandidates, claimAdjudications: claimAdjudications.length });
     }
   });
   embeddingTimer = setInterval(() => void check(), 2 * 60 * 1000);

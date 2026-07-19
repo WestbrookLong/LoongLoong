@@ -518,8 +518,103 @@ function reduceExistingCandidate(db, claimId, options = {}) {
   return { claimId: claim.id, action: "disputed" };
 }
 
+function applyClaimNeighborAdjudication(db, { claimAId, claimBId, relation, confidence, evidenceEventIds = [], runId = null }) {
+  const allowed = new Set(["same_value", "coexist", "temporal_update", "correction", "refinement", "unresolved_conflict", "unrelated"]);
+  if (!allowed.has(relation)) return { applied: false, reason: "invalid_relation" };
+  const left = db.get("SELECT * FROM memory_claims WHERE id = $id", { $id: claimAId });
+  const right = db.get("SELECT * FROM memory_claims WHERE id = $id", { $id: claimBId });
+  if (!left || !right || left.id === right.id) return { applied: false, reason: "missing_claim" };
+  const ids = [...new Set(evidenceEventIds.map(String))];
+  const leftEvidence = new Set(db.all("SELECT event_id FROM memory_evidence WHERE claim_id = $id", { $id: left.id }).map((row) => row.event_id));
+  const rightEvidence = new Set(db.all("SELECT event_id FROM memory_evidence WHERE claim_id = $id", { $id: right.id }).map((row) => row.event_id));
+  if (!ids.some((id) => leftEvidence.has(id)) || !ids.some((id) => rightEvidence.has(id))) {
+    return { applied: false, reason: "evidence_must_cover_both_claims" };
+  }
+  const score = clamp(confidence);
+  if (score < 0.75) return { applied: false, reason: "low_confidence" };
+  if (relation === "unrelated") return { applied: false, reason: "unrelated", reviewed: true };
+  const sameSlot = Boolean(left.slot_id && left.slot_id === right.slot_id);
+  const order = [left, right].sort((a, b) => {
+    const statusRank = (value) => value === "active" ? 3 : value === "disputed" ? 2 : value === "candidate" ? 1 : 0;
+    return statusRank(b.status) - statusRank(a.status)
+      || String(b.valid_from || b.asserted_at || b.updated_at).localeCompare(String(a.valid_from || a.asserted_at || a.updated_at));
+  });
+  const preferred = order[0];
+  const other = order[1];
+  const insertRelation = (name, source = preferred, target = other) => db.db.run(
+    `INSERT OR REPLACE INTO claim_relations
+     (source_claim_id, target_claim_id, relation, confidence, source_run_id, created_at)
+     VALUES ($source, $target, $relation, $confidence, $runId, $now)`,
+    { $source: source.id, $target: target.id, $relation: name, $confidence: score, $runId: runId, $now: isoNow() },
+  );
+  if (["coexist", "same_value"].includes(relation)) {
+    db.transaction(() => {
+      insertRelation(relation === "same_value" ? "same_as" : "coexists_with");
+      if (relation === "same_value" && sameSlot && score >= 0.92) {
+        db.db.run(
+          `INSERT OR IGNORE INTO memory_evidence (claim_id, event_id, relation, weight, created_at)
+           SELECT $winner, event_id, 'supports', weight, $now FROM memory_evidence WHERE claim_id = $loser`,
+          { $winner: preferred.id, $loser: other.id, $now: isoNow() },
+        );
+        db.db.run(
+          "UPDATE memory_claims SET status = 'superseded', temporal_state = 'unknown', superseded_by = $winner, supersession_reason = 'same_value_duplicate', updated_at = $now WHERE id = $loser",
+          { $winner: preferred.id, $loser: other.id, $now: isoNow() },
+        );
+      }
+    });
+    return { applied: true, action: relation, mutatedState: relation === "same_value" && sameSlot && score >= 0.92 };
+  }
+  if (!sameSlot) {
+    db.transaction(() => insertRelation(relation));
+    return { applied: true, action: "relation_only", mutatedState: false, reason: "different_slots" };
+  }
+  const newer = [left, right].sort((a, b) => String(b.valid_from || b.asserted_at || b.updated_at).localeCompare(String(a.valid_from || a.asserted_at || a.updated_at)))[0];
+  const older = newer.id === left.id ? right : left;
+  const newerEvidence = db.all(
+    `SELECT e.* FROM memory_evidence me JOIN events e ON e.id = me.event_id WHERE me.claim_id = $id`,
+    { $id: newer.id },
+  );
+  const hasCorrectionEvidence = newerEvidence.some((event) => event.event_type === "correction" || /(?:correction|corrected|actually|mistake|更正|纠正|记错|说错)/i.test(event.content));
+  const explicitTemporal = Boolean(newer.valid_from && older.valid_from && String(newer.valid_from) > String(older.valid_from));
+  if (relation === "correction" && (!hasCorrectionEvidence || score < 0.9)) return { applied: false, reason: "correction_not_grounded", reviewed: true };
+  if (relation === "temporal_update" && (!explicitTemporal || score < 0.88)) return { applied: false, reason: "temporal_update_not_grounded", reviewed: true };
+  if (relation === "refinement" && score < 0.92) return { applied: false, reason: "refinement_confidence_low", reviewed: true };
+  db.transaction(() => {
+    if (relation === "unresolved_conflict") {
+      db.db.run(
+        "UPDATE memory_claims SET status = 'disputed', temporal_state = 'unknown', supersession_reason = 'semantic_neighbor_conflict', updated_at = $now WHERE id IN ($left, $right)",
+        { $left: left.id, $right: right.id, $now: isoNow() },
+      );
+      insertRelation("conflicts_with", left, right);
+      addTransition(db, { slotId: left.slot_id, fromClaimId: older.id, toClaimId: newer.id,
+        type: "conflicts_with", temporalBasis: "semantic_neighbor_review", runId, evidenceEventIds: ids });
+      return;
+    }
+    if (relation === "temporal_update") {
+      db.db.run("UPDATE memory_claims SET status = 'active', temporal_state = 'historical', valid_to = $effective, updated_at = $now WHERE id = $id",
+        { $id: older.id, $effective: newer.valid_from, $now: isoNow() });
+      db.db.run("UPDATE memory_claims SET status = 'active', temporal_state = 'current', updated_at = $now WHERE id = $id",
+        { $id: newer.id, $now: isoNow() });
+      insertRelation("transitioned_to", older, newer);
+      addTransition(db, { slotId: left.slot_id, fromClaimId: older.id, toClaimId: newer.id,
+        type: "transitioned_to", effectiveAt: newer.valid_from, temporalBasis: "explicit", runId, evidenceEventIds: ids });
+      return;
+    }
+    db.db.run("UPDATE memory_claims SET status = 'superseded', temporal_state = 'unknown', superseded_by = $newer, supersession_reason = $reason, updated_at = $now WHERE id = $older",
+      { $older: older.id, $newer: newer.id, $reason: relation, $now: isoNow() });
+    db.db.run("UPDATE memory_claims SET status = 'active', temporal_state = 'current', updated_at = $now WHERE id = $id",
+      { $id: newer.id, $now: isoNow() });
+    insertRelation(relation === "correction" ? "corrected_by" : "refined_by", older, newer);
+    addTransition(db, { slotId: left.slot_id, fromClaimId: older.id, toClaimId: newer.id,
+      type: relation === "correction" ? "corrected_by" : "refined_by", effectiveAt: newer.valid_from || newer.asserted_at,
+      temporalBasis: newer.temporal_basis, runId, evidenceEventIds: ids });
+  });
+  return { applied: true, action: relation, mutatedState: true, olderClaimId: older.id, newerClaimId: newer.id };
+}
+
 module.exports = {
   applyClaimProposal,
+  applyClaimNeighborAdjudication,
   recallClaimSlots,
   reduceExistingCandidate,
   resolveOrCreateSlot,

@@ -34,6 +34,7 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
     { id: "state_revisions", label: "状态修订" },
     { id: "topic_aliases", label: "主题别名" },
     { id: "topic_merge_candidates", label: "合并候选" },
+    { id: "claim_neighbor_candidates", label: "Claim 邻居" },
   ],
   logs: [
     { id: "logs", label: "运行日志" },
@@ -268,6 +269,14 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "model_confidence", label: "置信度", width: "80px" },
     { key: "created_at", label: "时间", width: "150px" },
   ],
+  claim_neighbor_candidates: [
+    { key: "status", label: "状态", width: "110px" },
+    { key: "claim_a_text", label: "Claim A" },
+    { key: "claim_b_text", label: "Claim B" },
+    { key: "similarity", label: "相似度", width: "80px" },
+    { key: "relation", label: "判定", width: "140px" },
+    { key: "model_confidence", label: "置信度", width: "80px" },
+  ],
   continuity_feedback: [
     { key: "feedback_type", label: "反馈", width: "170px" },
     { key: "retrieval_query", label: "原查询" },
@@ -396,6 +405,18 @@ export function DataInspector({ kind, dashboard, onDashboard, notify }: Props) {
     }
   };
 
+  const scanClaimNeighbors = async () => {
+    setLoading(true);
+    try {
+      const result = await window.pet.scanClaimNeighbors();
+      notify(`Claim 邻居扫描完成，新增 ${result.candidateIds.length} 个候选。`);
+      onDashboard(await window.pet.getDashboard());
+      if (active === "claim_neighbor_candidates") await load();
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const evaluateContinuity = async () => {
     setLoading(true);
     try {
@@ -429,6 +450,10 @@ export function DataInspector({ kind, dashboard, onDashboard, notify }: Props) {
         </div>
         {kind === "memory" && (
           <div className="inspector-actions">
+            <button className="secondary-button" onClick={scanClaimNeighbors} disabled={loading}>
+              <Search size={17} />
+              扫描 Claim
+            </button>
             <button className="secondary-button" onClick={scanTopics} disabled={loading}>
               <Search size={17} />
               扫描主题

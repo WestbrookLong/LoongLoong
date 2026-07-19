@@ -242,6 +242,11 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
               <span className="toggle" aria-hidden="true" />
             </label>
             <label className="check-field">
+              <span>启用 Claim 语义治理</span>
+              <input type="checkbox" checked={form.claimSemanticGovernanceEnabled} onChange={(event) => update("claimSemanticGovernanceEnabled", event.target.checked)} />
+              <span className="toggle" aria-hidden="true" />
+            </label>
+            <label className="check-field">
               <span>允许发送记忆文本</span>
               <input type="checkbox" checked={form.remoteEmbeddingConsent} onChange={(event) => update("remoteEmbeddingConsent", event.target.checked)} />
               <span className="toggle" aria-hidden="true" />

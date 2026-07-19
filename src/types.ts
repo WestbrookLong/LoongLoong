@@ -47,6 +47,7 @@ export interface Settings {
   rerankerEnabled: boolean;
   rerankerModel: string;
   rerankerTimeoutMs: string;
+  claimSemanticGovernanceEnabled: boolean;
   temperature: string;
   autoSpeak: boolean;
   agentEnabled: boolean;
@@ -88,6 +89,7 @@ export interface Dashboard {
   capabilityGrants: number;
   embeddings: number;
   embeddingJobs: number;
+  claimNeighborCandidates: number;
   databasePath: string;
 }
 
@@ -205,6 +207,7 @@ export interface PetApi {
   consolidate(date?: string): Promise<Record<string, unknown>>;
   scanTopics(): Promise<{ candidateIds: string[]; adjudications: Record<string, unknown>[] }>;
   reindexEmbeddings(): Promise<{ queued: number; processed: number; failed: number }>;
+  scanClaimNeighbors(): Promise<{ candidateIds: string[]; adjudications: Record<string, unknown>[] }>;
   evaluateContinuity(): Promise<{ runId: string; recommendation: { action: string; safe: boolean } }>;
   continuityProfileAction(payload: { action: "stage" | "promote"; profileId: string }): Promise<{ applied: boolean; reason?: string }>;
   openExternal(url: string): Promise<void>;

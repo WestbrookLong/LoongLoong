@@ -1364,3 +1364,139 @@ Pet 当前记忆系统的核心不是“定时让 LLM 写一份摘要”，而�
 ```
 
 LLM 提供语义理解和压缩能力，确定性代码提供证据边界、可追溯性、状态一致性和失败回退。这个组合保证 Pet 能逐步形成连续记忆，同时避免把模型的一次猜测直接变成“它确信自己记得的事实”。
+# 增强记忆检索实现（P0-P6）
+
+> 本节记录 2026-07 完成的语义检索与后台治理实现。原有 Event、Claim、Topic、Open Loop、上下文压缩和每日巩固仍是事实来源；embedding 只增加召回与候选发现能力，不替代证据链和 reducer。
+
+## 1. 在线执行路径
+
+```text
+用户输入
+  -> Query Analyzer
+  -> 一次 Alibaba query embedding
+  -> Topic lexical/semantic route
+  -> deterministic eligibility
+  -> lexical + embedding + structural recall
+  -> weighted RRF
+  -> conditional structured LLM reranker
+  -> deterministic policy guard / dedup / diversity
+  -> token budget packer
+  -> Prompt
+```
+
+Voice 模式不调用语义检索和 reranker，继续使用低延迟确定性检索。Text/Deep 在 embedding、索引或 reranker 失败时回退到上一层可用结果，聊天本身不会因增强检索失败而失败。
+
+## 2. Alibaba embedding
+
+- API：DashScope Native API。
+- Base URL：`https://dashscope.aliyuncs.com/api/v1`。
+- Endpoint：`/services/embeddings/text-embedding/text-embedding`。
+- Model：`text-embedding-v4`。
+- Dimension：1024。
+- Document 请求使用 `text_type=document`；查询使用 `text_type=query` 和 retrieval instruct。
+- 单次批量上限固定为 10；复用现有安全存储中的模型 API Key。
+- 向量归一化后以 Float32 BLOB 存入 sql.js，当前规模使用本地 cosine scan。
+
+`electron/embedding.cjs` 负责文档构造、序列化、API 请求、任务对账和索引写入。每个文档包含 `content_schema_version` 和 `content_hash`。远程请求完成后必须再次读取源对象并比对 hash；对象在请求期间变化时，结果不会落库。
+
+## 3. 索引 Schema
+
+- `embedding_profiles`：provider、API style、model、dimension、document schema 和生命周期状态。
+- `memory_embeddings`：对象类型/ID、Profile、内容 hash、Float32 BLOB、源更新时间和错误状态。
+- `embedding_jobs`：持久化 pending/running/complete/failed/stale 队列、attempts、lease 和退避时间。
+- `memory_object_policies`：`normal/explicit_only/context_only/do_not_surface` 与 `inherit/allow_remote/local_only/do_not_embed`。
+- `retrieval_profiles`：RRF 参数和检索版本。
+- `reranker_profiles`：结构化重排模型、超时和候选上限。
+- `retrieval_stage_logs`：每一阶段的输入量、输出量、耗时、候选/决策和降级原因。
+
+索引对象包括 active/disputed Claim、canonical Topic、open Open Loop，以及 durable 或高连续性 Event。敏感内容、`local_only` 和 `do_not_embed` 对象不会发送到远程 embedding API。
+
+## 4. Query Analyzer 与 Eligibility
+
+`electron/retrieval.cjs` 统一识别：
+
+- temporal intent；
+- explanation intent；
+- experience/event intent；
+- low-information continuation；
+- forbidden secret；
+- voice/text/deep mode。
+
+Eligibility 在任何语义分数之前执行。当前查询只允许 current active Claim 和 disputed Claim；只有明确历史意图才开放 historical Claim。`superseded`、过期、future、forbidden、`do_not_surface` 和普通查询下的 `explicit_only` 对象不会成为候选。LLM reranker 看不到被 eligibility 拒绝的对象。
+
+## 5. 混合召回与打包
+
+候选分别按 lexical、semantic、structural 排名，再使用版本化 weighted RRF：
+
+```text
+score(d) = 1.2 / (60 + lexical_rank)
+         + 1.1 / (60 + semantic_rank)
+         + 0.6 / (60 + structural_rank)
+```
+
+semantic channel 还要求绝对 cosine floor。英语词法匹配按 token 精确匹配，避免 `be` 命中 `number` 之类的子串误报；中文保留 bigram 召回。
+
+融合后执行：
+
+1. 同对象跨通道合并；
+2. Claim 按 slot/value 去重；
+3. disputed 同槽位成组注入；
+4. 非历史/事件问题中，已由 Claim 表达的证据 Event 去重；
+5. Claim/Event/Topic/Open Loop 类型配额；
+6. Voice 1100、Text 2600、Deep 5600 token 预算；
+7. 注入 status、temporal state、epistemic basis、confidence 和 validity。
+
+## 6. 条件 LLM Reranker
+
+Deep、时间/因果查询、disputed 候选、语义主导而词法弱、或头部候选拥挤时才触发。模型只能返回：
+
+```json
+{
+  "decisions": [
+    {
+      "id": "claim:<existing-id>",
+      "decision": "include | exclude | uncertain",
+      "relevance": 0.0,
+      "usage": "answer | context | historical | conflict"
+    }
+  ]
+}
+```
+
+未知 ID、重复 ID、非法枚举会被丢弃。重排完成后仍重新执行确定性配额和打包。默认超时 5000 ms；超时、网络错误或无有效 decision 时使用 Phase 3 RRF 结果。
+
+## 7. Topic 语义路由与合并
+
+同一个 query vector 同时用于 Topic route 和 memory retrieval。低信息续接句绕过 embedding，固定交给 active Topic。普通查询对所有 canonical、未归档 Topic 计算 lexical 与 semantic 分数，只有超过固定阈值并满足现有 route commit threshold 才重开旧 Topic。
+
+Topic merge discovery 使用 embedding 补充低词面候选，但候选仍保持 `pending_model`。相似度不能直接 merge；必须经过已有 evidence adjudicator、Alias/Merge reducer 和 `resolveCanonicalTopic()`。
+
+## 8. Claim 后台语义治理
+
+`electron/claim-semantic.cjs` 只在相同 namespace、subject 和 scope 内发现近邻，写入 `claim_neighbor_candidates` 与双方 `claim_neighbor_evidence`。LLM 的封闭关系集合为：
+
+```text
+same_value | coexist | temporal_update | correction |
+refinement | unresolved_conflict | unrelated
+```
+
+`applyClaimNeighborAdjudication()` 是唯一状态写入口：
+
+- 必须有双方 Claim 的真实 Event 证据；
+- `temporal_update` 必须有可比较的显式 `valid_from`；
+- `correction` 必须有 correction Event 或纠正语义；
+- refinement/correction/temporal update 有更高置信度门槛；
+- 跨槽位默认只写关系，不改 active 状态；
+- 通过校验后才写 historical/superseded/disputed、Claim relation 和 Claim transition。
+
+`claim_neighbor_candidates` 保存相似度、模型关系、置信度、证据、原始输出、状态和错误。仅 embedding 相似时状态保持 `pending_model`，不会改写事实。
+
+## 9. 评测与开发检查
+
+- `npm run eval:retrieval`：Phase 0 确定性基线。
+- `npm run eval:retrieval:hybrid`：固定离线向量的混合检索评测。
+- 当前固定集基线 Recall 为 0.8333；混合检索 Recall 为 1.0。
+- 两者均要求 forbidden/historical leak 为 0，disputed protocol recall 为 1.0。
+- 开发面板可检查 embedding Profile、向量索引、索引任务、对象策略、检索阶段、检索/reranker Profile 和 Claim 邻居候选。
+
+生产参数不会根据在线反馈自动修改。所有 Profile、阶段输出和用户纠正信号先记录，后续只能通过固定数据集评测和显式版本发布调整。

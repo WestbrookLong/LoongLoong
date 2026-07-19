@@ -727,6 +727,43 @@ class PetDatabase {
         activated_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS claim_neighbor_candidates (
+        id TEXT PRIMARY KEY,
+        pair_key TEXT NOT NULL UNIQUE,
+        claim_a_id TEXT NOT NULL,
+        claim_b_id TEXT NOT NULL,
+        claim_a_version INTEGER NOT NULL,
+        claim_b_version INTEGER NOT NULL,
+        embedding_profile_id TEXT NOT NULL,
+        similarity REAL NOT NULL,
+        status TEXT NOT NULL,
+        relation TEXT,
+        model_confidence REAL,
+        rationale TEXT,
+        evidence_event_ids_json TEXT NOT NULL DEFAULT '[]',
+        source_hash TEXT NOT NULL,
+        model_version TEXT,
+        prompt_version TEXT,
+        raw_output_json TEXT NOT NULL DEFAULT '{}',
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        adjudicated_at TEXT,
+        applied_at TEXT,
+        FOREIGN KEY (claim_a_id) REFERENCES memory_claims(id),
+        FOREIGN KEY (claim_b_id) REFERENCES memory_claims(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS claim_neighbor_evidence (
+        candidate_id TEXT NOT NULL,
+        claim_side TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (candidate_id, claim_side, event_id),
+        FOREIGN KEY (candidate_id) REFERENCES claim_neighbor_candidates(id),
+        FOREIGN KEY (event_id) REFERENCES events(id)
+      );
+
       CREATE TABLE IF NOT EXISTS agent_tasks (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -857,6 +894,7 @@ class PetDatabase {
       CREATE INDEX IF NOT EXISTS idx_embedding_jobs_ready ON embedding_jobs(status, available_at);
       CREATE INDEX IF NOT EXISTS idx_embeddings_profile_status ON memory_embeddings(embedding_profile_id, status, object_type);
       CREATE INDEX IF NOT EXISTS idx_retrieval_stage_retrieval ON retrieval_stage_logs(retrieval_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_claim_neighbor_status ON claim_neighbor_candidates(status, created_at);
     `);
 
     const ensureColumn = (table, column, definition) => {
@@ -1093,6 +1131,7 @@ class PetDatabase {
       rerankerEnabled: "true",
       rerankerModel: "qwen3.7-max",
       rerankerTimeoutMs: "5000",
+      claimSemanticGovernanceEnabled: "true",
       temperature: "0.7",
       autoSpeak: "true",
       agentEnabled: "true",

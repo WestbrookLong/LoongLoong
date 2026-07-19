@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld("pet", {
   consolidate: (date) => ipcRenderer.invoke("memory:consolidate", date),
   scanTopics: () => ipcRenderer.invoke("memory:scan-topics"),
   reindexEmbeddings: () => ipcRenderer.invoke("memory:reindex-embeddings"),
+  scanClaimNeighbors: () => ipcRenderer.invoke("memory:scan-claim-neighbors"),
   evaluateContinuity: () => ipcRenderer.invoke("continuity:evaluate"),
   continuityProfileAction: (payload) => ipcRenderer.invoke("continuity:profile-action", payload),
   openExternal: (url) => ipcRenderer.invoke("app:open-external", url),
