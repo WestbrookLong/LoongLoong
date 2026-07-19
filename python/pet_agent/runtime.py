@@ -57,6 +57,14 @@ class AgentRuntime:
         return paths, {f"path_ref_{index}": path for index, path in enumerate(paths, 1)}
 
     @staticmethod
+    def _current_user_paths(messages: list[dict[str, Any]]) -> list[str]:
+        """Return paths from this request only, never an older turn."""
+        for message in reversed(messages):
+            if message.get("role") == "user" and isinstance(message.get("content"), str):
+                return extract_windows_paths(message["content"])
+        return []
+
+    @staticmethod
     def _resolve_path_arguments(arguments: dict[str, Any], known_paths: list[str],
                                 path_registry: dict[str, str]) -> dict[str, Any]:
         resolved = dict(arguments)
@@ -107,12 +115,17 @@ class AgentRuntime:
         self.deadline = started + timeout_seconds
         messages = list(self.config["messages"])
         known_user_paths, path_registry = self._known_path_registry(messages)
+        current_user_paths = self._current_user_paths(messages)
         path_reference_prompt = ""
         if path_registry:
-            references = "\n".join(f"- {reference}: {path}" for reference, path in path_registry.items())
+            references = "\n".join(
+                f"- {reference} ({'CURRENT REQUEST' if path in current_user_paths else 'historical context'}): {path}"
+                for reference, path in path_registry.items()
+            )
             path_reference_prompt = (
                 "\n\nKnown local paths are registered below. For filesystem tool calls, put the reference "
-                "such as path_ref_1 in the path argument instead of copying the path text. The runtime will resolve it.\n"
+                "such as path_ref_1 in the path argument instead of copying the path text. The runtime will resolve it. "
+                "A path marked CURRENT REQUEST has priority and must never be substituted with a historical path.\n"
                 + references
             )
         messages[0] = {

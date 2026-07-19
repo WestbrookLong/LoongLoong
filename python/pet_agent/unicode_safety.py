@@ -66,15 +66,25 @@ def extract_windows_paths(value: str) -> list[str]:
 
 def repair_known_paths(value: str, known_paths: list[str]) -> str:
     """Ground a damaged generated path to an exact path present in the user message."""
-    known_by_skeleton = {
-        "".join(char.casefold() for char in path if ord(char) < 128): path
-        for path in known_paths
-    }
+    known_exact = {path.casefold(): path for path in known_paths}
+    known_by_skeleton: dict[str, list[str]] = {}
+    for path in known_paths:
+        skeleton = "".join(char.casefold() for char in path if ord(char) < 128)
+        candidates = known_by_skeleton.setdefault(skeleton, [])
+        if path not in candidates:
+            candidates.append(path)
 
     def replace(match: re.Match[str]) -> str:
         candidate = match.group(0)
+        exact = known_exact.get(candidate.casefold())
+        if exact is not None:
+            return exact
         skeleton = "".join(char.casefold() for char in candidate if ord(char) < 128)
-        return known_by_skeleton.get(skeleton, candidate)
+        matches = known_by_skeleton.get(skeleton, [])
+        # An ASCII-only skeleton is intentionally lossy. Chinese filenames in the
+        # same directory can all collapse to `...\\Thought\\.md`; only ground a
+        # damaged path when that skeleton identifies one unique user path.
+        return matches[0] if len(matches) == 1 else candidate
 
     return WINDOWS_PATH_RE.sub(replace, str(value))
 

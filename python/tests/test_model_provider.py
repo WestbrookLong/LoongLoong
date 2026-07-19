@@ -75,6 +75,12 @@ class ModelProviderTests(unittest.TestCase):
         self.assertEqual(extract_windows_paths("请读取 " + correct), [correct])
         self.assertEqual(repair_known_paths("Reading `" + corrupted + "`", [correct]), "Reading `" + correct + "`")
 
+    def test_does_not_replace_distinct_chinese_paths_with_the_same_ascii_skeleton(self):
+        thought = r"D:\Users\WESTBROOK\Obsidian Vault\Obsidian_Note\精神分析实践\Thought\我的思想脉络.md"
+        journal = r"D:\Users\WESTBROOK\Obsidian Vault\Obsidian_Note\精神分析实践\Thought\杂记.md"
+        self.assertEqual(repair_known_paths(thought, [thought, journal]), thought)
+        self.assertEqual(repair_known_paths(journal, [thought, journal]), journal)
+
 
 class ModelProviderStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_stream_transport_repairs_split_surrogates_and_request_messages(self):

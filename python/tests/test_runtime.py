@@ -7,6 +7,7 @@ from pathlib import Path
 from pet_agent.approvals import ApprovalInbox
 from pet_agent.model_provider import ModelStep, ToolCall
 from pet_agent.runtime import AgentCancelled, AgentRuntime
+from pet_agent.unicode_safety import repair_known_paths
 
 
 class FakeProvider:
@@ -168,6 +169,39 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([item["arguments"]["path"] for item in result["receipts"]], [str(target), str(target)])
             approval = next(event for event in events if event.get("type") == "approval_required")
             self.assertEqual(Path(approval["requested_path"]), target.resolve(strict=False))
+
+    async def test_current_chinese_path_is_not_rewritten_to_historical_file(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            directory = Path(workspace, "精神分析实践", "Thought")
+            directory.mkdir(parents=True)
+            journal = directory / "杂记.md"
+            target = directory / "我的思想脉络.md"
+            journal.write_text("journal", encoding="utf-8")
+            target.write_text("target", encoding="utf-8")
+            runtime = AgentRuntime({
+                "workspace_root": workspace, "base_url": "https://example.com/v1", "api_key": "test", "model": "test",
+                "messages": [
+                    {"role": "system", "content": "system"},
+                    {"role": "user", "content": f"以前读取 {journal}"},
+                    {"role": "assistant", "content": "done"},
+                    {"role": "user", "content": f"现在读取 {target}"},
+                ],
+                "max_steps": 3, "timeout_seconds": 30,
+            }, lambda event: None, threading.Event())
+            runtime.provider = FakeProvider([
+                ModelStep(tool_calls=[ToolCall(
+                    "call_target", "filesystem_read", json.dumps({"path": str(target)}, ensure_ascii=False),
+                )], finish_reason="tool_calls"),
+                ModelStep(content="done", finish_reason="stop"),
+            ])
+
+            paths, registry = runtime._known_path_registry(runtime.config["messages"])
+            self.assertEqual(registry["path_ref_1"], str(target))
+            self.assertEqual(runtime._current_user_paths(runtime.config["messages"]), [str(target)])
+            self.assertEqual(repair_known_paths(str(target), paths), str(target))
+            result = await runtime.run()
+            self.assertTrue(result["receipts"][0]["result"]["ok"], result["receipts"])
+            self.assertEqual(result["receipts"][0]["arguments"]["path"], str(target))
 
     async def test_unicode_external_read_and_write_use_manual_approval(self):
         with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as external:
