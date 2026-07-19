@@ -26,7 +26,7 @@ function parseJsonResponse(content) {
   }
 }
 
-async function structuredCompletion({ settings, apiKey, model, messages, temperature = 0.1 }) {
+async function structuredCompletion({ settings, apiKey, model, messages, temperature = 0.1, signal }) {
   const baseUrl = normalizeBaseUrl(settings.chatBaseUrl || settings.baseUrl);
   const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl);
   if (!apiKey && !isLocal) throw new Error("请先配置模型 API 密钥以启用智能记忆。");
@@ -41,6 +41,7 @@ async function structuredCompletion({ settings, apiKey, model, messages, tempera
     method: "POST",
     headers: requestHeaders(apiKey),
     body: JSON.stringify(payload),
+    signal,
   });
   if (!response.ok && response.status === 400) {
     delete payload.response_format;
@@ -48,6 +49,7 @@ async function structuredCompletion({ settings, apiKey, model, messages, tempera
       method: "POST",
       headers: requestHeaders(apiKey),
       body: JSON.stringify(payload),
+      signal,
     });
   }
   if (!response.ok) {

@@ -55,6 +55,7 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
     { id: "embedding_jobs", label: "索引任务" },
     { id: "memory_object_policies", label: "记忆策略" },
     { id: "retrieval_profiles", label: "检索 Profile" },
+    { id: "reranker_profiles", label: "重排 Profile" },
   ],
 };
 
@@ -318,6 +319,12 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "status", label: "状态", width: "90px" },
     { key: "id", label: "Profile" },
     { key: "version", label: "检索版本", width: "160px" },
+    { key: "config_json", label: "参数" },
+  ],
+  reranker_profiles: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "id", label: "Profile" },
+    { key: "model", label: "模型", width: "160px" },
     { key: "config_json", label: "参数" },
   ],
 };

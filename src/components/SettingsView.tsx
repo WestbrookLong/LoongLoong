@@ -237,6 +237,11 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
               <span className="toggle" aria-hidden="true" />
             </label>
             <label className="check-field">
+              <span>启用条件重排</span>
+              <input type="checkbox" checked={form.rerankerEnabled} onChange={(event) => update("rerankerEnabled", event.target.checked)} />
+              <span className="toggle" aria-hidden="true" />
+            </label>
+            <label className="check-field">
               <span>允许发送记忆文本</span>
               <input type="checkbox" checked={form.remoteEmbeddingConsent} onChange={(event) => update("remoteEmbeddingConsent", event.target.checked)} />
               <span className="toggle" aria-hidden="true" />
@@ -254,6 +259,16 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
             <label>
               <span>向量维度</span>
               <input type="number" min="64" max="4096" step="64" value={form.embeddingDimension} onChange={(event) => update("embeddingDimension", event.target.value)} />
+            </label>
+          </div>
+          <div className="form-grid compact">
+            <label>
+              <span>Reranker 模型</span>
+              <input value={form.rerankerModel} onChange={(event) => update("rerankerModel", event.target.value)} />
+            </label>
+            <label>
+              <span>Reranker 超时 ms</span>
+              <input type="number" min="500" max="15000" step="500" value={form.rerankerTimeoutMs} onChange={(event) => update("rerankerTimeoutMs", event.target.value)} />
             </label>
           </div>
         </section>

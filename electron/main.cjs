@@ -140,6 +140,7 @@ function publicSettings() {
     embeddingEnabled: settings.embeddingEnabled === "true",
     remoteEmbeddingConsent: settings.remoteEmbeddingConsent === "true",
     hybridRetrievalEnabled: settings.hybridRetrievalEnabled === "true",
+    rerankerEnabled: settings.rerankerEnabled === "true",
     agentDirectoryGrants: activeGrants(db),
     hasApiKey: Boolean(getApiKey()),
   };
@@ -755,6 +756,10 @@ function records({ type, search = "", limit = 200 } = {}) {
     },
     retrieval_profiles: {
       sql: `SELECT * FROM retrieval_profiles WHERE id LIKE $query OR version LIKE $query OR status LIKE $query
+            ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at DESC LIMIT $limit`,
+    },
+    reranker_profiles: {
+      sql: `SELECT * FROM reranker_profiles WHERE id LIKE $query OR model LIKE $query OR status LIKE $query
             ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at DESC LIMIT $limit`,
     },
   };

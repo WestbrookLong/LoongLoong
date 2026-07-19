@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const { isoNow } = require("./database.cjs");
 const { containsForbiddenSecret, estimateTokens, retrieveMemory } = require("./memory.cjs");
 const { PROFILE_ID, blobToVector, cosineSimilarity, embedTexts } = require("./embedding.cjs");
+const { rerankCandidates, shouldRerank } = require("./retrieval-reranker.cjs");
 
 function queryTerms(text) {
   const normalized = String(text || "").toLowerCase();
@@ -193,12 +194,7 @@ function packHybridContext(selected, mode, analysis) {
   return { context, tokenEstimate: estimateTokens(context) };
 }
 
-function buildHybridResult(db, baseline, args, analysis, semanticCandidates) {
-  const profileRow = db.get("SELECT config_json FROM retrieval_profiles WHERE status = 'active' ORDER BY created_at DESC LIMIT 1");
-  let profile = {};
-  try { profile = JSON.parse(profileRow?.config_json || "{}"); } catch {}
-  const candidates = loadEligibleCandidates(db, analysis, args);
-  const fused = fuseCandidates(candidates, semanticCandidates, profile);
+function finalizeHybridResult(db, baseline, args, analysis, fused) {
   const selected = selectDiverseCandidates(db, fused, analysis, args.mode);
   const packed = packHybridContext(selected, args.mode, analysis);
   const selectedClaimIds = selected.filter((item) => item.objectType === "claim").map((item) => item.objectId);
@@ -213,6 +209,15 @@ function buildHybridResult(db, baseline, args, analysis, semanticCandidates) {
   );
   return { ...baseline, ...packed, selectedClaimIds, selectedEventIds, selectedTopicIds, selectedOpenLoopIds,
     hybrid: true, fusedCandidates: fused };
+}
+
+function buildHybridResult(db, baseline, args, analysis, semanticCandidates) {
+  const profileRow = db.get("SELECT config_json FROM retrieval_profiles WHERE status = 'active' ORDER BY created_at DESC LIMIT 1");
+  let profile = {};
+  try { profile = JSON.parse(profileRow?.config_json || "{}"); } catch {}
+  const candidates = loadEligibleCandidates(db, analysis, args);
+  const fused = fuseCandidates(candidates, semanticCandidates, profile);
+  return finalizeHybridResult(db, baseline, args, analysis, fused);
 }
 
 function logStage(db, retrievalId, stage, status, startedAt, inputCount, outputCount, payload = {}, error = null) {
@@ -254,11 +259,25 @@ async function retrieveMemoryEnhanced(db, args, options = {}) {
     });
     if (String(settings.hybridRetrievalEnabled) === "true") {
       const fusionStartedAt = Date.now();
-      const hybrid = buildHybridResult(db, baseline, args, analysis, candidates);
+      let hybrid = buildHybridResult(db, baseline, args, analysis, candidates);
       logStage(db, baseline.id, "hybrid_fusion", "complete", fusionStartedAt, hybrid.fusedCandidates.length,
         hybrid.selectedClaimIds.length + hybrid.selectedEventIds.length + hybrid.selectedTopicIds.length + hybrid.selectedOpenLoopIds.length,
         { selected_claim_ids: hybrid.selectedClaimIds, selected_event_ids: hybrid.selectedEventIds,
           selected_topic_ids: hybrid.selectedTopicIds, selected_open_loop_ids: hybrid.selectedOpenLoopIds });
+      if (String(settings.rerankerEnabled) === "true" && shouldRerank(analysis, hybrid.fusedCandidates, args.mode)) {
+        const rerankStartedAt = Date.now();
+        try {
+          const reranked = await rerankCandidates({ settings, apiKey: options.apiKey || "", query: analysis.text,
+            analysis, fused: hybrid.fusedCandidates, complete: options.rerankerComplete });
+          hybrid = finalizeHybridResult(db, baseline, args, analysis, reranked.reranked);
+          hybrid.reranked = true;
+          logStage(db, baseline.id, "llm_reranker", "complete", rerankStartedAt, hybrid.fusedCandidates.length,
+            reranked.decisions.length, { decisions: reranked.decisions, usage: reranked.usage });
+        } catch (error) {
+          logStage(db, baseline.id, "llm_reranker", "degraded", rerankStartedAt, hybrid.fusedCandidates.length,
+            0, { fallback: "hybrid_fusion" }, String(error.message || error));
+        }
+      }
       return { ...hybrid, queryAnalysis: analysis, shadowSemantic: candidates };
     }
     return { ...baseline, queryAnalysis: analysis, shadowSemantic: candidates };
@@ -268,5 +287,5 @@ async function retrieveMemoryEnhanced(db, args, options = {}) {
   }
 }
 
-module.exports = { analyzeQuery, buildHybridResult, eligibleSemanticRows, fuseCandidates, loadEligibleCandidates,
+module.exports = { analyzeQuery, buildHybridResult, eligibleSemanticRows, finalizeHybridResult, fuseCandidates, loadEligibleCandidates,
   packHybridContext, queryTerms, retrieveMemoryEnhanced, semanticRecall, selectDiverseCandidates };

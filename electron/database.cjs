@@ -717,6 +717,16 @@ class PetDatabase {
         activated_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS reranker_profiles (
+        id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        model TEXT NOT NULL,
+        config_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        activated_at TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS agent_tasks (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -1080,6 +1090,9 @@ class PetDatabase {
       embeddingDimension: "1024",
       embeddingBatchSize: "10",
       hybridRetrievalEnabled: "true",
+      rerankerEnabled: "true",
+      rerankerModel: "qwen3.7-max",
+      rerankerTimeoutMs: "5000",
       temperature: "0.7",
       autoSpeak: "true",
       agentEnabled: "true",
@@ -1112,6 +1125,13 @@ class PetDatabase {
         $config: JSON.stringify({ rrf_k: 60, weights: { lexical: 1.2, semantic: 1.1, structural: 0.6 }, semantic_floor: 0.15 }),
         $now: stamp,
       },
+    );
+    this.db.run(
+      `INSERT OR IGNORE INTO reranker_profiles
+       (id, version, model, config_json, status, created_at, activated_at)
+       VALUES ('structured-reranker-v1', 'memory-reranker-v1', 'qwen3.7-max',
+        '{"max_candidates":20,"timeout_ms":5000}', 'active', $now, $now)`,
+      { $now: stamp },
     );
     this.db.run(
       `INSERT OR IGNORE INTO continuity_state

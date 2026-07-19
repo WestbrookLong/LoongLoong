@@ -44,6 +44,9 @@ export interface Settings {
   embeddingDimension: string;
   embeddingBatchSize: string;
   hybridRetrievalEnabled: boolean;
+  rerankerEnabled: boolean;
+  rerankerModel: string;
+  rerankerTimeoutMs: string;
   temperature: string;
   autoSpeak: boolean;
   agentEnabled: boolean;
