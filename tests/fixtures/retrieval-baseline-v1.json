@@ -1,0 +1,110 @@
+{
+  "version": "retrieval-baseline-v1",
+  "distractor_count": 12,
+  "claims": [
+    {
+      "id": "claim_db_sqlite",
+      "predicate": "pet_database",
+      "text": "The Pet project uses SQLite for durable local storage.",
+      "importance": 0.9,
+      "valid_from": "2026-06-01T00:00:00.000Z"
+    },
+    {
+      "id": "claim_reply_concise",
+      "predicate": "communication_style",
+      "text": "The user prefers concise engineering explanations with concrete details.",
+      "importance": 0.55,
+      "valid_from": "2026-06-10T00:00:00.000Z"
+    },
+    {
+      "id": "claim_residence_shanghai",
+      "predicate": "residence",
+      "text": "The user currently lives in Shanghai.",
+      "importance": 0.82,
+      "valid_from": "2026-07-01T00:00:00.000Z"
+    },
+    {
+      "id": "claim_residence_beijing",
+      "predicate": "residence",
+      "text": "The user lived in Beijing in June 2026.",
+      "importance": 0.8,
+      "temporal_state": "historical",
+      "valid_from": "2026-06-01T00:00:00.000Z",
+      "valid_to": "2026-07-01T00:00:00.000Z"
+    },
+    {
+      "id": "claim_voice_uncertain",
+      "predicate": "voice_provider",
+      "text": "The preferred voice provider may be Alibaba Cloud.",
+      "importance": 0.7,
+      "status": "disputed",
+      "epistemic_basis": "inferred"
+    },
+    {
+      "id": "claim_archived_theme",
+      "predicate": "ui_theme",
+      "text": "The interface should use a purple monochrome theme.",
+      "importance": 0.7,
+      "status": "superseded",
+      "temporal_state": "unknown"
+    }
+  ],
+  "events": [
+    {
+      "id": "event_voice_404",
+      "content": "Voice transcription failed with HTTP 404 because chat and transcription base URLs were shared.",
+      "event_type": "tool_result",
+      "salience": 0.82,
+      "occurred_at": "2026-07-12T08:00:00.000Z"
+    },
+    {
+      "id": "event_icon_selected",
+      "content": "The user selected the finger-walking image as the temporary Pet icon.",
+      "event_type": "decision",
+      "salience": 0.75,
+      "occurred_at": "2026-07-10T08:00:00.000Z"
+    }
+  ],
+  "cases": [
+    {
+      "id": "lexical_database",
+      "query": "Which database does Pet use?",
+      "mode": "text",
+      "expected_claim_ids": ["claim_db_sqlite"],
+      "forbidden_claim_ids": ["claim_archived_theme"]
+    },
+    {
+      "id": "semantic_paraphrase_style",
+      "query": "How verbose should your technical answers be?",
+      "mode": "text",
+      "expected_claim_ids": ["claim_reply_concise"]
+    },
+    {
+      "id": "current_temporal",
+      "query": "Where does the user live now?",
+      "mode": "text",
+      "expected_claim_ids": ["claim_residence_shanghai"],
+      "forbidden_claim_ids": ["claim_residence_beijing"]
+    },
+    {
+      "id": "historical_temporal",
+      "query": "Where did the user live previously?",
+      "mode": "deep",
+      "expected_claim_ids": ["claim_residence_beijing"],
+      "allow_historical": true
+    },
+    {
+      "id": "disputed_voice",
+      "query": "Which voice provider does the user prefer?",
+      "mode": "text",
+      "expected_claim_ids": ["claim_voice_uncertain"],
+      "expected_disputed_ids": ["claim_voice_uncertain"]
+    },
+    {
+      "id": "event_diagnostic",
+      "query": "Why did voice transcription return 404?",
+      "mode": "deep",
+      "expected_event_ids": ["event_voice_404"]
+    }
+  ]
+}
