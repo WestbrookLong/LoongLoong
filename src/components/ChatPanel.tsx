@@ -1,4 +1,4 @@
-import { ArrowUp, Check, ChevronDown, Mic, Search, Square } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, Mic, Pencil, Search, Square, Trash2 } from "lucide-react";
 import { FormEvent, KeyboardEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { Message, Session, StreamingResponse } from "../types";
 import { ReasoningPanel } from "./ReasoningPanel";
@@ -20,6 +20,8 @@ interface Props {
   onMic: () => void;
   onCancel: () => void;
   onSessionSelect: (sessionId: string) => void;
+  onSessionRename: (sessionId: string, title: string) => Promise<void>;
+  onSessionDelete: (sessionId: string) => Promise<void>;
   onResolveApproval: (approvalId: string, decision: "approve" | "deny", scope?: "once" | "task", chooseDirectory?: boolean) => void;
 }
 
@@ -48,11 +50,12 @@ function messageReasoning(message: Message) {
 
 export function ChatPanel({
   messages, sessions, currentSessionId, busy, switchingSession, streamingResponse,
-  onSend, onMic, onCancel, onSessionSelect, onResolveApproval,
+  onSend, onMic, onCancel, onSessionSelect, onSessionRename, onSessionDelete, onResolveApproval,
 }: Props) {
   const [text, setText] = useState("");
   const [deep, setDeep] = useState(false);
   const [sessionOpen, setSessionOpen] = useState(false);
+  const [sessionContext, setSessionContext] = useState<{ sessionId: string; x: number; y: number } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sessionPickerRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -65,6 +68,7 @@ export function ChatPanel({
     setText("");
     setDeep(false);
     setSessionOpen(false);
+    setSessionContext(null);
   }, [currentSessionId]);
 
   useEffect(() => {
@@ -84,10 +88,16 @@ export function ChatPanel({
   useEffect(() => {
     if (!sessionOpen) return undefined;
     const closeOnOutside = (event: PointerEvent) => {
-      if (!sessionPickerRef.current?.contains(event.target as Node)) setSessionOpen(false);
+      if (!sessionPickerRef.current?.contains(event.target as Node)) {
+        setSessionOpen(false);
+        setSessionContext(null);
+      }
     };
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setSessionOpen(false);
+      if (event.key === "Escape") {
+        setSessionOpen(false);
+        setSessionContext(null);
+      }
     };
     document.addEventListener("pointerdown", closeOnOutside);
     document.addEventListener("keydown", closeOnEscape);
@@ -121,6 +131,24 @@ export function ChatPanel({
   };
 
   const currentSession = sessions.find((session) => session.id === currentSessionId);
+  const contextSession = sessions.find((session) => session.id === sessionContext?.sessionId);
+
+  const renameContextSession = async () => {
+    if (!contextSession) return;
+    setSessionContext(null);
+    const title = window.prompt("输入新的会话名称", contextSession.title)?.trim();
+    if (!title || title === contextSession.title) return;
+    await onSessionRename(contextSession.id, title);
+  };
+
+  const deleteContextSession = async () => {
+    if (!contextSession) return;
+    setSessionContext(null);
+    const confirmed = window.confirm(`确定删除会话“${contextSession.title}”吗？\n\n只会删除这段会话及其消息，已经形成的长期记忆不会被删除。`);
+    if (!confirmed) return;
+    setSessionOpen(false);
+    await onSessionDelete(contextSession.id);
+  };
 
   return (
     <section className="chat-panel">
@@ -152,8 +180,18 @@ export function ChatPanel({
                         role="option"
                         aria-selected={active}
                         onClick={() => {
+                          setSessionContext(null);
                           setSessionOpen(false);
                           if (!active) onSessionSelect(session.id);
+                        }}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setSessionContext({
+                            sessionId: session.id,
+                            x: Math.min(event.clientX, window.innerWidth - 170),
+                            y: Math.min(event.clientY, window.innerHeight - 100),
+                          });
                         }}
                       >
                         <span className="session-option-check">{active && <Check size={14} />}</span>
@@ -165,6 +203,24 @@ export function ChatPanel({
                       </button>
                     );
                   })}
+                </div>
+              )}
+              {sessionOpen && sessionContext && contextSession && (
+                <div
+                  className="session-context-menu"
+                  role="menu"
+                  aria-label={`${contextSession.title} 会话操作`}
+                  style={{ left: sessionContext.x, top: sessionContext.y }}
+                  onContextMenu={(event) => event.preventDefault()}
+                >
+                  <button type="button" role="menuitem" onClick={() => void renameContextSession()}>
+                    <Pencil size={14} />
+                    重命名
+                  </button>
+                  <button type="button" role="menuitem" className="danger" onClick={() => void deleteContextSession()}>
+                    <Trash2 size={14} />
+                    删除会话
+                  </button>
                 </div>
               )}
             </div>

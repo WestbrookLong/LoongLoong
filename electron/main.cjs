@@ -265,6 +265,19 @@ function switchSession(sessionId) {
   return { session, messages, sessions: db.listSessions() };
 }
 
+function deleteChatSession(sessionId) {
+  const id = String(sessionId || "").trim();
+  const active = db.getActiveSession();
+  db.deleteSession(id);
+  if (active?.id === id) {
+    const fallback = db.listSessions(1)[0];
+    if (fallback) return switchSession(fallback.id);
+    return createSession();
+  }
+  const current = db.getActiveSession();
+  return { session: current, messages: current ? db.messagesForSession(current.id) : [], sessions: db.listSessions() };
+}
+
 function inferActivity(text) {
   if (/(?:AI\s*宠物|Pet\b|Hermes|记忆系统)/i.test(text)) return "pet";
   if (/(?:读书|阅读|这本书|章节)/i.test(text)) return "reading";
@@ -792,6 +805,18 @@ function registerIpc() {
   ipcMain.handle("chat:switch", (_event, sessionId) => {
     if (agentSidecar.runs.size) throw new Error("Agent 正在运行，请先停止当前回答再切换会话。");
     return switchSession(sessionId);
+  });
+  ipcMain.handle("chat:rename", (_event, payload) => {
+    if (agentSidecar.runs.size) throw new Error("Agent 正在运行，请先停止当前回答再重命名会话。");
+    const session = db.renameSession(payload?.sessionId, payload?.title);
+    db.log("info", "session", "重命名历史会话。", { sessionId: session.id });
+    return { session, sessions: db.listSessions() };
+  });
+  ipcMain.handle("chat:delete", (_event, sessionId) => {
+    if (agentSidecar.runs.size) throw new Error("Agent 正在运行，请先停止当前回答再删除会话。");
+    const result = deleteChatSession(sessionId);
+    db.log("info", "session", "删除历史会话，已保留落成记忆。", { sessionId: String(sessionId || "") });
+    return result;
   });
   ipcMain.handle("app:open-external", async (_event, value) => {
     const url = new URL(String(value || ""));

@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld("pet", {
   },
   newChat: () => ipcRenderer.invoke("chat:new"),
   switchSession: (sessionId) => ipcRenderer.invoke("chat:switch", sessionId),
+  renameSession: (payload) => ipcRenderer.invoke("chat:rename", payload),
+  deleteSession: (sessionId) => ipcRenderer.invoke("chat:delete", sessionId),
   transcribe: (payload) => ipcRenderer.invoke("voice:transcribe", payload),
   getRecords: (payload) => ipcRenderer.invoke("data:records", payload),
   getDashboard: () => ipcRenderer.invoke("data:dashboard"),

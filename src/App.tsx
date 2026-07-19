@@ -158,6 +158,42 @@ export default function App() {
     }
   };
 
+  const renameChat = async (sessionId: string, title: string) => {
+    if (busy || switchingSession) return;
+    try {
+      const result = await window.pet.renameSession({ sessionId, title });
+      setSessions(result.sessions);
+      setBoot((current) => current ? {
+        ...current,
+        session: current.session.id === sessionId ? { ...current.session, title: result.session.title } : current.session,
+        sessions: result.sessions,
+      } : current);
+      notify("会话已重命名。");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), true);
+    }
+  };
+
+  const deleteChat = async (sessionId: string) => {
+    if (busy || switchingSession) return;
+    setSwitchingSession(true);
+    try {
+      const result = await window.pet.deleteSession(sessionId);
+      setMessages(result.messages);
+      setSessions(result.sessions);
+      setStreamingResponse(null);
+      setBoot((current) => current ? {
+        ...current, session: result.session, messages: result.messages, sessions: result.sessions,
+      } : current);
+      setRoute("chat");
+      notify("会话已删除，长期记忆已保留。");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), true);
+    } finally {
+      setSwitchingSession(false);
+    }
+  };
+
   if (!boot || !settings || !dashboard) {
     return <div className="app-loading"><span /><span /><span /></div>;
   }
@@ -188,6 +224,8 @@ export default function App() {
             onMic={() => void voice.toggleManual()}
             onCancel={() => void cancel()}
             onSessionSelect={(sessionId) => void switchChat(sessionId)}
+            onSessionRename={renameChat}
+            onSessionDelete={deleteChat}
             onResolveApproval={(approvalId, decision, scope, chooseDirectory) => void resolveApproval(approvalId, decision, scope, chooseDirectory)}
           />
           <div className="dev-stats" aria-label="开发状态">

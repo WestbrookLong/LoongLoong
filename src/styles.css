@@ -362,6 +362,32 @@ input:checked + .toggle::after { transform: translateX(16px); }
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
+.session-context-menu {
+  position: fixed;
+  z-index: 120;
+  display: grid;
+  width: 158px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 14px 34px var(--shadow);
+}
+.session-context-menu button {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--ink);
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+.session-context-menu button:hover { background: var(--surface-hover); }
+.session-context-menu button.danger { color: var(--danger, #b84b45); }
 .panel-header .message-count { color: var(--muted); font-size: 11px; }
 
 .deep-toggle, .secondary-button, .command-button {

@@ -1142,6 +1142,57 @@ class PetDatabase {
     return this.get("SELECT * FROM sessions WHERE id = $id", { $id: sessionId });
   }
 
+  renameSession(sessionId, title) {
+    const id = String(sessionId || "").trim();
+    const nextTitle = String(title || "").trim().replace(/\s+/g, " ");
+    if (!id) throw new Error("会话 ID 不能为空。");
+    if (!nextTitle) throw new Error("会话名称不能为空。");
+    if (nextTitle.length > 80) throw new Error("会话名称不能超过 80 个字符。");
+    const session = this.get("SELECT id FROM sessions WHERE id = $id", { $id: id });
+    if (!session) throw new Error("会话不存在或已被删除。");
+    this.run("UPDATE sessions SET title = $title WHERE id = $id", { $id: id, $title: nextTitle });
+    return this.get("SELECT * FROM sessions WHERE id = $id", { $id: id });
+  }
+
+  deleteSession(sessionId) {
+    const id = String(sessionId || "").trim();
+    if (!id) throw new Error("会话 ID 不能为空。");
+    const session = this.get("SELECT * FROM sessions WHERE id = $id", { $id: id });
+    if (!session) throw new Error("会话不存在或已被删除。");
+    this.transaction(() => {
+      const runIds = this.all("SELECT id FROM agent_runs WHERE session_id = $id", { $id: id }).map((row) => row.id);
+      for (const runId of runIds) {
+        this.db.run("DELETE FROM policy_decisions WHERE run_id = $runId", { $runId: runId });
+        this.db.run("DELETE FROM approval_requests WHERE run_id = $runId", { $runId: runId });
+        this.db.run("DELETE FROM tool_executions WHERE run_id = $runId", { $runId: runId });
+        this.db.run("DELETE FROM agent_steps WHERE run_id = $runId", { $runId: runId });
+      }
+      this.db.run("DELETE FROM agent_runs WHERE session_id = $id", { $id: id });
+      this.db.run("DELETE FROM agent_tasks WHERE session_id = $id", { $id: id });
+
+      this.db.run("DELETE FROM context_compaction_runs WHERE session_id = $id", { $id: id });
+      this.db.run("UPDATE context_snapshots SET parent_snapshot_id = NULL WHERE session_id = $id", { $id: id });
+      this.db.run("DELETE FROM context_snapshots WHERE session_id = $id", { $id: id });
+      this.db.run("DELETE FROM retrieval_logs WHERE session_id = $id", { $id: id });
+
+      // Preserve materialized memory/state runs while detaching the deleted chat container.
+      this.db.run("UPDATE memory_extraction_runs SET session_id = NULL WHERE session_id = $id", { $id: id });
+      this.db.run("UPDATE continuity_update_runs SET session_id = NULL WHERE session_id = $id", { $id: id });
+      this.db.run(
+        `UPDATE events SET source_kind = 'deleted_session', source_id = NULL, hermes_session_id = NULL
+         WHERE hermes_session_id = $id OR source_id IN (SELECT id FROM messages WHERE session_id = $id)`,
+        { $id: id },
+      );
+      this.db.run(
+        "DELETE FROM event_sources WHERE message_id IN (SELECT id FROM messages WHERE session_id = $id)",
+        { $id: id },
+      );
+      this.db.run("DELETE FROM messages WHERE session_id = $id", { $id: id });
+      this.db.run("DELETE FROM sessions WHERE id = $id", { $id: id });
+    });
+    return session;
+  }
+
   getSettings() {
     const rows = this.all("SELECT key, value FROM app_settings");
     return Object.fromEntries(rows.map((row) => [row.key, row.value]));

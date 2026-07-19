@@ -184,6 +184,8 @@ export interface PetApi {
   onChatStream(callback: (event: ChatStreamEvent) => void): () => void;
   newChat(): Promise<{ session: Session; messages: Message[]; sessions: Session[] }>;
   switchSession(sessionId: string): Promise<{ session: Session; messages: Message[]; sessions: Session[] }>;
+  renameSession(payload: { sessionId: string; title: string }): Promise<{ session: Session; sessions: Session[] }>;
+  deleteSession(sessionId: string): Promise<{ session: Session; messages: Message[]; sessions: Session[] }>;
   transcribe(payload: VoicePayload): Promise<{ text: string }>;
   getRecords(payload: { type: string; search?: string; limit?: number }): Promise<Record<string, unknown>[]>;
   getDashboard(): Promise<Dashboard>;
