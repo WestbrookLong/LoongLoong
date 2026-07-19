@@ -27,6 +27,20 @@ function analyzeQuery(query, mode = "text") {
     semanticEligible: !lowInformation && !containsForbiddenSecret(text) && mode !== "voice" };
 }
 
+async function prepareSemanticQuery({ db, query, mode = "text", settings = null, apiKey = "", embedder = embedTexts }) {
+  const analysis = analyzeQuery(query, mode);
+  const effectiveSettings = settings || db.getSettings();
+  const enabled = String(effectiveSettings.embeddingEnabled) === "true" && String(effectiveSettings.remoteEmbeddingConsent) === "true";
+  if (!enabled || !analysis.semanticEligible) return { analysis, vector: null, status: "skipped" };
+  try {
+    const [vector] = await embedder({ settings: effectiveSettings, apiKey, texts: [analysis.text], textType: "query",
+      instruct: "Retrieve durable personal memory and ongoing topics relevant to the user's current request." });
+    return { analysis, vector, status: "ready" };
+  } catch (error) {
+    return { analysis, vector: null, status: "degraded", error: String(error.message || error) };
+  }
+}
+
 function eligibleSemanticRows(db, profileId = PROFILE_ID) {
   return db.all(
     `SELECT e.* FROM memory_embeddings e
@@ -233,7 +247,7 @@ function logStage(db, retrievalId, stage, status, startedAt, inputCount, outputC
 
 async function retrieveMemoryEnhanced(db, args, options = {}) {
   const baseline = retrieveMemory(db, args);
-  const analysis = analyzeQuery(args.query, args.mode);
+  const analysis = options.semanticQuery?.analysis || analyzeQuery(args.query, args.mode);
   const settings = options.settings || db.getSettings();
   const enabled = String(settings.embeddingEnabled) === "true" && String(settings.remoteEmbeddingConsent) === "true";
   const startedAt = Date.now();
@@ -249,8 +263,8 @@ async function retrieveMemoryEnhanced(db, args, options = {}) {
   }
   try {
     const embedder = options.embedder || embedTexts;
-    const [queryVector] = await embedder({ settings, apiKey: options.apiKey || "", texts: [analysis.text],
-      textType: "query", instruct: "Retrieve durable personal memory that helps answer the user's current request." });
+    const queryVector = options.semanticQuery?.vector || (await embedder({ settings, apiKey: options.apiKey || "", texts: [analysis.text],
+      textType: "query", instruct: "Retrieve durable personal memory that helps answer the user's current request." }))[0];
     const candidates = semanticRecall(rows, queryVector, options.semanticLimit || 24);
     const baselineKeys = new Set([...baseline.selectedClaimIds.map((id) => `claim:${id}`), ...baseline.selectedEventIds.map((id) => `event:${id}`)]);
     logStage(db, baseline.id, "semantic_shadow", "complete", startedAt, rows.length, candidates.length, {
@@ -288,4 +302,4 @@ async function retrieveMemoryEnhanced(db, args, options = {}) {
 }
 
 module.exports = { analyzeQuery, buildHybridResult, eligibleSemanticRows, finalizeHybridResult, fuseCandidates, loadEligibleCandidates,
-  packHybridContext, queryTerms, retrieveMemoryEnhanced, semanticRecall, selectDiverseCandidates };
+  packHybridContext, prepareSemanticQuery, queryTerms, retrieveMemoryEnhanced, semanticRecall, selectDiverseCandidates };

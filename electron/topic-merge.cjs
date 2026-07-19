@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const { isoNow } = require("./database.cjs");
 const { structuredCompletion } = require("./model.cjs");
+const { PROFILE_ID, blobToVector, cosineSimilarity } = require("./embedding.cjs");
 const {
   collectTopicEvidence,
   expandTopicFamily,
@@ -82,7 +83,7 @@ function topicDocument(db, topicId) {
   };
 }
 
-function compareDocuments(left, right) {
+function compareDocuments(left, right, semanticScore = -1) {
   const exactName = [...left.normalizedNames].some((name) => right.normalizedNames.has(name));
   const lexicalScore = exactName ? 1 : jaccard(left.titleTerms, right.titleTerms);
   const structuralScore = jaccard(left.structuralTerms, right.structuralTerms);
@@ -90,7 +91,8 @@ function compareDocuments(left, right) {
     exact_name: exactName,
     lexical_score: Number(lexicalScore.toFixed(4)),
     structural_score: Number(structuralScore.toFixed(4)),
-    recall_score: Number(Math.max(lexicalScore, structuralScore * 0.8).toFixed(4)),
+    semantic_score: Number(semanticScore.toFixed(4)),
+    recall_score: Number(Math.max(lexicalScore, structuralScore * 0.8, semanticScore >= 0.72 ? semanticScore * 0.9 : 0).toFixed(4)),
   };
 }
 
@@ -117,14 +119,19 @@ function discoverMergeCandidates(db, { topicIds = [], trigger = "scheduled", max
   const requested = new Set(asArray(topicIds).map(String));
   const sources = requested.size ? allTopics.filter((topic) => requested.has(topic.id)) : allTopics;
   const documents = new Map(allTopics.map((topic) => [topic.id, topicDocument(db, topic.id)]));
+  const vectors = new Map(db.all(
+    "SELECT object_id, vector_blob FROM memory_embeddings WHERE object_type = 'topic' AND embedding_profile_id = $profile AND status = 'ready'",
+    { $profile: PROFILE_ID },
+  ).map((row) => [row.object_id, blobToVector(row.vector_blob)]));
   const discovered = [];
 
   for (const source of sources) {
     const sourceDocument = documents.get(source.id);
     const ranked = allTopics
       .filter((candidate) => candidate.id !== source.id && !hasBlockingRelation(db, source.id, candidate.id))
-      .map((candidate) => ({ candidate, comparison: compareDocuments(sourceDocument, documents.get(candidate.id)) }))
-      .filter(({ comparison }) => comparison.exact_name || comparison.lexical_score >= 0.18 || comparison.structural_score >= 0.12)
+      .map((candidate) => ({ candidate, comparison: compareDocuments(sourceDocument, documents.get(candidate.id),
+        vectors.has(source.id) && vectors.has(candidate.id) ? cosineSimilarity(vectors.get(source.id), vectors.get(candidate.id)) : -1) }))
+      .filter(({ comparison }) => comparison.exact_name || comparison.lexical_score >= 0.18 || comparison.structural_score >= 0.12 || comparison.semantic_score >= 0.72)
       .sort((a, b) => b.comparison.recall_score - a.comparison.recall_score)
       .slice(0, Math.max(1, Number(maxPerTopic) || 5));
 

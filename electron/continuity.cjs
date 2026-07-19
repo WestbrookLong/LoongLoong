@@ -3,6 +3,7 @@ const { isoNow } = require("./database.cjs");
 const { containsForbiddenSecret, estimateTokens } = require("./memory.cjs");
 const { getContinuityProfile, profileState } = require("./continuity-profiles.cjs");
 const { applyStateUpdates, statePromptState, stateUpdateContract } = require("./state.cjs");
+const { PROFILE_ID, blobToVector, cosineSimilarity } = require("./embedding.cjs");
 const {
   applyGovernanceUpdates,
   applyHealthReports,
@@ -189,17 +190,23 @@ function lexicalScore(text, terms) {
   return clamp(terms.filter((term) => value.includes(term)).length / Math.min(5, terms.length));
 }
 
-function extractRouteFeatures(db, query) {
+function extractRouteFeatures(db, query, semanticVector = null) {
   const state = continuityState(db);
   const active = state?.active_topic_id ? resolveCanonicalTopic(db, state.active_topic_id) : null;
   const lowInformation = /^(?:继续|接着|接着刚才|还是之前那个|上次说到哪(?:了)?|那这个怎么办|然后呢|我后来又想了想|continue|continue that|pick up where we left off)[。？！?!…\s]*$/i.test(String(query || "").trim());
   const aliasTopic = findTopicByAlias(db, query);
   const terms = queryTerms(query);
-  const scored = currentTopics(db, 12).map((topic) => {
+  const semanticRows = semanticVector ? new Map(db.all(
+    "SELECT object_id, vector_blob FROM memory_embeddings WHERE object_type = 'topic' AND embedding_profile_id = $profile AND status = 'ready'",
+    { $profile: PROFILE_ID },
+  ).map((row) => [row.object_id, row.vector_blob])) : new Map();
+  const scored = currentTopics(db, semanticVector ? 200 : 12).map((topic) => {
     const items = topicItems(db, topic.id, 8).map((item) => item.content).join(" ");
     const aliases = db.all("SELECT alias FROM topic_aliases WHERE topic_id = $id", { $id: topic.id }).map((item) => item.alias).join(" ");
-    const score = lexicalScore(`${topic.title} ${aliases} ${topic.overview} ${topic.current_position} ${items}`, terms);
-    return { topicId: topic.id, title: topic.title, score };
+    const lexical = lexicalScore(`${topic.title} ${aliases} ${topic.overview} ${topic.current_position} ${items}`, terms);
+    const semantic = semanticRows.has(topic.id) ? cosineSimilarity(semanticVector, blobToVector(semanticRows.get(topic.id))) : -1;
+    const score = Math.max(lexical, semantic >= 0.55 ? semantic * 0.9 : 0);
+    return { topicId: topic.id, title: topic.title, score, lexical, semantic };
   }).sort((a, b) => b.score - a.score);
   return {
     query: String(query || ""),
@@ -211,6 +218,8 @@ function extractRouteFeatures(db, query) {
       topicId: item.topicId,
       title: item.title,
       score: Number(item.score.toFixed(4)),
+      lexical: Number(item.lexical.toFixed(4)),
+      semantic: Number(item.semantic.toFixed(4)),
     })),
   };
 }
@@ -238,7 +247,7 @@ function decideContinuityRoute(features, profileInput = null) {
       intent: best.topicId === features.activeTopicId ? "continue_current" : "reopen_old_topic",
       targetTopicId: best.topicId,
       confidence: Number(best.score),
-      source: "topic_lexical",
+      source: Number(best.semantic || -1) > Number(best.lexical || 0) ? "topic_semantic" : "topic_lexical",
     };
   }
   if (features.anaphora && features.activeTopicId) {
@@ -263,6 +272,16 @@ function routeContinuity(db, query) {
     },
     shadow,
   };
+}
+
+function routeContinuityEnhanced(db, query, { semanticQuery = null } = {}) {
+  if (!semanticQuery?.vector || semanticQuery.analysis?.lowInformation) return routeContinuity(db, query);
+  const profiles = profileState(db);
+  const features = extractRouteFeatures(db, query, semanticQuery.vector);
+  const active = decideContinuityRoute(features, profiles.active);
+  const shadow = profiles.challenger ? decideContinuityRoute(features, profiles.challenger) : null;
+  return { ...active, features: { activeTopicId: features.activeTopicId, lowInformation: features.lowInformation,
+    aliasTopicId: features.aliasTopicId, anaphora: features.anaphora, candidates: features.candidates.slice(0, 5) }, shadow };
 }
 
 function commitContinuityRoute(db, route) {
@@ -1037,4 +1056,5 @@ module.exports = {
   extractRouteFeatures,
   normalizeEpistemicBasis,
   routeContinuity,
+  routeContinuityEnhanced,
 };

@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, session, shell } = require("electron");
 const { PetDatabase, isoNow, localDate } = require("./database.cjs");
 const { captureUserTurn } = require("./memory.cjs");
-const { retrieveMemoryEnhanced } = require("./retrieval.cjs");
+const { prepareSemanticQuery, retrieveMemoryEnhanced } = require("./retrieval.cjs");
 const {
   compactSessionContext,
   cleanMemoryQuality,
@@ -15,7 +15,7 @@ const {
   sessionContextBlock,
 } = require("./memory-intelligence.cjs");
 const { chatCompletion, testConnection, transcribeAudio } = require("./model.cjs");
-const { buildContinuityContext, commitContinuityRoute, routeContinuity } = require("./continuity.cjs");
+const { buildContinuityContext, commitContinuityRoute, routeContinuityEnhanced } = require("./continuity.cjs");
 const { buildStateContext } = require("./state.cjs");
 const { checkTopicHealth } = require("./topic-governance.cjs");
 const { discoverMergeCandidates, processMergeCandidates } = require("./topic-merge.cjs");
@@ -372,12 +372,13 @@ async function handleChat(payload, onDelta = null) {
     }
   }
 
-  const continuityRoute = routeContinuity(db, text);
+  const contextMode = modality === "voice" ? "voice" : payload?.deep ? "deep" : "text";
+  const semanticQuery = await prepareSemanticQuery({ db, query: text, mode: contextMode, settings, apiKey });
+  const continuityRoute = routeContinuityEnhanced(db, text, { semanticQuery });
   if (continuityRoute.intent === "reopen_old_topic" && continuityRoute.targetTopicId) {
     checkTopicHealth(db, continuityRoute.targetTopicId, { trigger: "topic_reopen" });
   }
   commitContinuityRoute(db, continuityRoute);
-  const contextMode = modality === "voice" ? "voice" : payload?.deep ? "deep" : "text";
   const activityId = inferActivity(text);
   const continuity = buildContinuityContext(db, {
     mode: contextMode,
@@ -394,7 +395,7 @@ async function handleChat(payload, onDelta = null) {
     sessionId: sessionRow.id,
     activityId,
     mode: contextMode,
-  }, { settings, apiKey });
+  }, { settings, apiKey, semanticQuery });
   db.run(
     `UPDATE retrieval_logs SET score_version = $scoreVersion, route_json = $route,
      selected_topic_ids_json = $topicIds, selected_topic_item_ids_json = $itemIds,
