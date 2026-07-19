@@ -694,6 +694,20 @@ class PetDatabase {
         FOREIGN KEY (embedding_profile_id) REFERENCES embedding_profiles(id)
       );
 
+      CREATE TABLE IF NOT EXISTS retrieval_stage_logs (
+        id TEXT PRIMARY KEY,
+        retrieval_id TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        status TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        input_count INTEGER NOT NULL DEFAULT 0,
+        output_count INTEGER NOT NULL DEFAULT 0,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        error TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (retrieval_id) REFERENCES retrieval_logs(id)
+      );
+
       CREATE TABLE IF NOT EXISTS agent_tasks (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -823,6 +837,7 @@ class PetDatabase {
       CREATE INDEX IF NOT EXISTS idx_claim_transition_evidence_event ON claim_transition_evidence(event_id);
       CREATE INDEX IF NOT EXISTS idx_embedding_jobs_ready ON embedding_jobs(status, available_at);
       CREATE INDEX IF NOT EXISTS idx_embeddings_profile_status ON memory_embeddings(embedding_profile_id, status, object_type);
+      CREATE INDEX IF NOT EXISTS idx_retrieval_stage_retrieval ON retrieval_stage_logs(retrieval_id, created_at);
     `);
 
     const ensureColumn = (table, column, definition) => {

@@ -65,6 +65,7 @@ export interface Dashboard {
   claimTransitions: number;
   logs: number;
   retrievals: number;
+  retrievalStages: number;
   contextSnapshots: number;
   memoryExtractions: number;
   contextCompactions: number;

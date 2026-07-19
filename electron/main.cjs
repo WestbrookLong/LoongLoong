@@ -3,7 +3,8 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, session, shell } = require("electron");
 const { PetDatabase, isoNow, localDate } = require("./database.cjs");
-const { captureUserTurn, retrieveMemory } = require("./memory.cjs");
+const { captureUserTurn } = require("./memory.cjs");
+const { retrieveMemoryEnhanced } = require("./retrieval.cjs");
 const {
   compactSessionContext,
   cleanMemoryQuality,
@@ -159,6 +160,7 @@ function dashboard() {
     claimTransitions: count("claim_transitions"),
     logs: count("logs"),
     retrievals: count("retrieval_logs"),
+    retrievalStages: count("retrieval_stage_logs"),
     contextSnapshots: count("context_snapshots"),
     memoryExtractions: count("memory_extraction_runs"),
     contextCompactions: count("context_compaction_runs"),
@@ -385,12 +387,12 @@ async function handleChat(payload, onDelta = null) {
     activityId,
   });
 
-  const retrieval = retrieveMemory(db, {
+  const retrieval = await retrieveMemoryEnhanced(db, {
     query: text,
     sessionId: sessionRow.id,
     activityId,
     mode: contextMode,
-  });
+  }, { settings, apiKey });
   db.run(
     `UPDATE retrieval_logs SET score_version = $scoreVersion, route_json = $route,
      selected_topic_ids_json = $topicIds, selected_topic_item_ids_json = $itemIds,
@@ -589,6 +591,12 @@ function records({ type, search = "", limit = 200 } = {}) {
     },
     retrievals: {
       sql: `SELECT * FROM retrieval_logs WHERE query LIKE $query ORDER BY created_at DESC LIMIT $limit`,
+    },
+    retrieval_stages: {
+      sql: `SELECT s.*, r.query FROM retrieval_stage_logs s
+            JOIN retrieval_logs r ON r.id = s.retrieval_id
+            WHERE s.stage LIKE $query OR s.status LIKE $query OR r.query LIKE $query OR s.payload_json LIKE $query
+            ORDER BY s.created_at DESC LIMIT $limit`,
     },
     days: {
       sql: `SELECT * FROM journal_days WHERE local_date LIKE $query OR COALESCE(summary, '') LIKE $query

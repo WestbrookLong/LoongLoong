@@ -16,6 +16,7 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
     { id: "messages", label: "消息" },
     { id: "sessions", label: "会话" },
     { id: "retrievals", label: "检索" },
+    { id: "retrieval_stages", label: "检索阶段" },
     { id: "snapshots", label: "上下文快照" },
   ],
   memory: [
@@ -74,6 +75,14 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "candidate_count", label: "候选", width: "70px" },
     { key: "token_estimate", label: "Tokens", width: "80px" },
     { key: "created_at", label: "时间", width: "150px" },
+  ],
+  retrieval_stages: [
+    { key: "stage", label: "阶段", width: "130px" },
+    { key: "status", label: "状态", width: "90px" },
+    { key: "query", label: "查询" },
+    { key: "input_count", label: "输入", width: "70px" },
+    { key: "output_count", label: "输出", width: "70px" },
+    { key: "duration_ms", label: "耗时 ms", width: "90px" },
   ],
   snapshots: [
     { key: "summary_text", label: "会话摘要" },
