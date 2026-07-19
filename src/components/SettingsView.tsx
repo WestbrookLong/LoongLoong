@@ -225,6 +225,32 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
             <span>后台提取批大小</span>
             <input type="number" min="2" max="24" step="1" value={form.memoryBatchSize} onChange={(event) => update("memoryBatchSize", event.target.value)} />
           </label>
+          <div className="form-grid compact">
+            <label className="check-field">
+              <span>启用语义索引</span>
+              <input type="checkbox" checked={form.embeddingEnabled} onChange={(event) => update("embeddingEnabled", event.target.checked)} />
+              <span className="toggle" aria-hidden="true" />
+            </label>
+            <label className="check-field">
+              <span>允许发送记忆文本</span>
+              <input type="checkbox" checked={form.remoteEmbeddingConsent} onChange={(event) => update("remoteEmbeddingConsent", event.target.checked)} />
+              <span className="toggle" aria-hidden="true" />
+            </label>
+          </div>
+          <label>
+            <span>Embedding 模型地址</span>
+            <input value={form.embeddingBaseUrl} onChange={(event) => update("embeddingBaseUrl", event.target.value)} />
+          </label>
+          <div className="form-grid">
+            <label>
+              <span>Embedding 模型</span>
+              <input value={form.embeddingModel} onChange={(event) => update("embeddingModel", event.target.value)} />
+            </label>
+            <label>
+              <span>向量维度</span>
+              <input type="number" min="64" max="4096" step="64" value={form.embeddingDimension} onChange={(event) => update("embeddingDimension", event.target.value)} />
+            </label>
+          </div>
         </section>
 
         <div className="settings-actions">

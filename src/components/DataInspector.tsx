@@ -49,6 +49,10 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
     { id: "continuity_feedback", label: "连续性反馈" },
     { id: "continuity_evals", label: "评分评测" },
     { id: "continuity_profiles", label: "评分 Profile" },
+    { id: "embedding_profiles", label: "Embedding Profile" },
+    { id: "embeddings", label: "向量索引" },
+    { id: "embedding_jobs", label: "索引任务" },
+    { id: "memory_object_policies", label: "记忆策略" },
   ],
 };
 
@@ -272,6 +276,33 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "is_active", label: "Active", width: "70px" },
     { key: "is_challenger", label: "Shadow", width: "70px" },
     { key: "created_at", label: "时间", width: "150px" },
+  ],
+  embedding_profiles: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "model", label: "模型" },
+    { key: "dimension", label: "维度", width: "80px" },
+    { key: "document_schema_version", label: "文档 Schema", width: "180px" },
+  ],
+  embeddings: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "object_type", label: "类型", width: "100px" },
+    { key: "document_preview", label: "记忆文档" },
+    { key: "dimension", label: "维度", width: "70px" },
+    { key: "updated_at", label: "更新时间", width: "150px" },
+  ],
+  embedding_jobs: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "object_type", label: "类型", width: "100px" },
+    { key: "object_id", label: "对象" },
+    { key: "attempts", label: "尝试", width: "70px" },
+    { key: "error", label: "错误" },
+  ],
+  memory_object_policies: [
+    { key: "object_type", label: "类型", width: "100px" },
+    { key: "object_id", label: "对象" },
+    { key: "surface_policy", label: "注入策略", width: "120px" },
+    { key: "embedding_policy", label: "向量策略", width: "120px" },
+    { key: "reason", label: "原因" },
   ],
 };
 

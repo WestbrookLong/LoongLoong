@@ -636,6 +636,64 @@ class PetDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS embedding_profiles (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        api_style TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dimension INTEGER NOT NULL,
+        document_schema_version TEXT NOT NULL,
+        config_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_object_policies (
+        object_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        surface_policy TEXT NOT NULL DEFAULT 'normal',
+        embedding_policy TEXT NOT NULL DEFAULT 'inherit',
+        reason TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (object_type, object_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_embeddings (
+        object_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        embedding_profile_id TEXT NOT NULL,
+        content_schema_version TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dimension INTEGER NOT NULL,
+        vector_blob BLOB,
+        status TEXT NOT NULL,
+        source_updated_at TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (object_type, object_id, embedding_profile_id),
+        FOREIGN KEY (embedding_profile_id) REFERENCES embedding_profiles(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS embedding_jobs (
+        id TEXT PRIMARY KEY,
+        object_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        embedding_profile_id TEXT NOT NULL,
+        expected_content_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        available_at TEXT NOT NULL,
+        lease_until TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (object_type, object_id, embedding_profile_id, expected_content_hash),
+        FOREIGN KEY (embedding_profile_id) REFERENCES embedding_profiles(id)
+      );
+
       CREATE TABLE IF NOT EXISTS agent_tasks (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -763,6 +821,8 @@ class PetDatabase {
       CREATE INDEX IF NOT EXISTS idx_claim_slots_lookup ON claim_slots(namespace, scope_type, scope_id, subject, predicate);
       CREATE INDEX IF NOT EXISTS idx_claim_transitions_slot ON claim_transitions(slot_id, effective_at DESC, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_claim_transition_evidence_event ON claim_transition_evidence(event_id);
+      CREATE INDEX IF NOT EXISTS idx_embedding_jobs_ready ON embedding_jobs(status, available_at);
+      CREATE INDEX IF NOT EXISTS idx_embeddings_profile_status ON memory_embeddings(embedding_profile_id, status, object_type);
     `);
 
     const ensureColumn = (table, column, definition) => {
@@ -989,6 +1049,12 @@ class PetDatabase {
       contextSoftThreshold: "0.75",
       contextTargetRatio: "0.45",
       memoryBatchSize: "6",
+      embeddingEnabled: "true",
+      remoteEmbeddingConsent: "true",
+      embeddingBaseUrl: "https://dashscope.aliyuncs.com/api/v1",
+      embeddingModel: "text-embedding-v4",
+      embeddingDimension: "1024",
+      embeddingBatchSize: "10",
       temperature: "0.7",
       autoSpeak: "true",
       agentEnabled: "true",
@@ -1005,6 +1071,14 @@ class PetDatabase {
         { $key: key, $value: value, $updatedAt: stamp },
       );
     }
+    this.db.run(
+      `INSERT OR IGNORE INTO embedding_profiles
+       (id, provider, api_style, model, dimension, document_schema_version,
+        config_json, status, created_at, updated_at)
+       VALUES ('aliyun-text-embedding-v4-1024-v1', 'aliyun', 'dashscope-native',
+        'text-embedding-v4', 1024, 'pet-memory-document-v1', '{}', 'active', $now, $now)`,
+      { $now: stamp },
+    );
     this.db.run(
       `INSERT OR IGNORE INTO continuity_state
        (id, recent_topic_ids_json, updated_at) VALUES ('primary', '[]', $updatedAt)`,

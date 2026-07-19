@@ -23,10 +23,12 @@ const { promoteContinuityProfile, stageContinuityProfile } = require("./continui
 const { AgentSidecar } = require("./agent-sidecar.cjs");
 const { createAgentAudit, failAgentAudit, persistAgentResult } = require("./agent-audit.cjs");
 const { activeGrants, addPersistentReadGrant, recordApprovalRequest, resolveApprovalRequest, revokeGrant } = require("./approval-broker.cjs");
+const { processEmbeddingJobs, reconcileEmbeddingIndex } = require("./embedding.cjs");
 
 let mainWindow;
 let db;
 let scheduledTimer;
+let embeddingTimer;
 let memoryJobQueue = Promise.resolve();
 const pendingApprovals = new Map();
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -134,6 +136,8 @@ function publicSettings() {
     ...currentSettings,
     autoSpeak: settings.autoSpeak === "true",
     agentEnabled: settings.agentEnabled === "true",
+    embeddingEnabled: settings.embeddingEnabled === "true",
+    remoteEmbeddingConsent: settings.remoteEmbeddingConsent === "true",
     agentDirectoryGrants: activeGrants(db),
     hasApiKey: Boolean(getApiKey()),
   };
@@ -171,6 +175,8 @@ function dashboard() {
     toolExecutions: count("tool_executions"),
     approvals: count("approval_requests"),
     capabilityGrants: count("capability_grants", "WHERE status = 'active'"),
+    embeddings: count("memory_embeddings", "WHERE status = 'ready'"),
+    embeddingJobs: count("embedding_jobs", "WHERE status IN ('pending', 'running', 'failed')"),
     databasePath: db.filePath,
   };
 }
@@ -709,6 +715,35 @@ function records({ type, search = "", limit = 200 } = {}) {
             WHERE p.id LIKE $query OR p.status LIKE $query OR p.profile_json LIKE $query
             ORDER BY is_active DESC, is_challenger DESC, p.created_at DESC LIMIT $limit`,
     },
+    embedding_profiles: {
+      sql: `SELECT * FROM embedding_profiles
+            WHERE id LIKE $query OR model LIKE $query OR status LIKE $query
+            ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at DESC LIMIT $limit`,
+    },
+    embeddings: {
+      sql: `SELECT e.object_type || ':' || e.object_id AS id, e.object_type, e.object_id,
+            e.embedding_profile_id, e.dimension, e.status, e.content_hash,
+            e.source_updated_at, e.error, e.updated_at,
+            CASE e.object_type
+              WHEN 'claim' THEN (SELECT canonical_text FROM memory_claims WHERE id = e.object_id)
+              WHEN 'topic' THEN (SELECT title FROM topic_threads WHERE id = e.object_id)
+              WHEN 'open_loop' THEN (SELECT description FROM open_loops WHERE id = e.object_id)
+              WHEN 'event' THEN (SELECT content FROM events WHERE id = e.object_id)
+            END AS document_preview
+            FROM memory_embeddings e
+            WHERE e.object_id LIKE $query OR e.object_type LIKE $query OR COALESCE(e.error, '') LIKE $query
+            ORDER BY e.updated_at DESC LIMIT $limit`,
+    },
+    embedding_jobs: {
+      sql: `SELECT * FROM embedding_jobs
+            WHERE object_id LIKE $query OR object_type LIKE $query OR status LIKE $query OR COALESCE(error, '') LIKE $query
+            ORDER BY updated_at DESC LIMIT $limit`,
+    },
+    memory_object_policies: {
+      sql: `SELECT object_type || ':' || object_id AS id, * FROM memory_object_policies
+            WHERE object_id LIKE $query OR object_type LIKE $query OR surface_policy LIKE $query OR embedding_policy LIKE $query
+            ORDER BY updated_at DESC LIMIT $limit`,
+    },
   };
   const definition = definitions[type];
   if (!definition) throw new Error("未知的数据表类型。");
@@ -851,6 +886,11 @@ function registerIpc() {
       : [];
     return { candidateIds, adjudications };
   }, false));
+  ipcMain.handle("memory:reindex-embeddings", () => enqueueMemoryJob(async () => {
+    const queued = reconcileEmbeddingIndex(db);
+    const result = await processEmbeddingJobs({ db, settings: db.getSettings(), apiKey: getApiKey(), limit: 100 });
+    return { queued, ...result };
+  }, false));
   ipcMain.handle("continuity:evaluate", () => {
     const fixtureDirectory = path.join(process.cwd(), "tests", "fixtures");
     const dataset = {
@@ -897,6 +937,18 @@ function startDailyScheduler() {
     }
   };
   scheduledTimer = setInterval(() => void check(), 30 * 60 * 1000);
+  void check();
+}
+
+function startEmbeddingScheduler() {
+  const check = () => enqueueMemoryJob(async () => {
+    const queued = reconcileEmbeddingIndex(db);
+    const result = await processEmbeddingJobs({ db, settings: db.getSettings(), apiKey: getApiKey(), limit: 20 });
+    if (queued || result.processed || result.failed) {
+      db.log(result.failed ? "warn" : "info", "embedding", "Embedding index reconciliation completed.", { queued, ...result });
+    }
+  });
+  embeddingTimer = setInterval(() => void check(), 2 * 60 * 1000);
   void check();
 }
 
@@ -971,6 +1023,7 @@ app.whenReady().then(async () => {
   });
   createWindow();
   startDailyScheduler();
+  startEmbeddingScheduler();
   db.log("info", "app", "Pet v0.1 启动。", { databasePath: db.filePath });
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -983,6 +1036,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   if (scheduledTimer) clearInterval(scheduledTimer);
+  if (embeddingTimer) clearInterval(embeddingTimer);
   agentSidecar.close();
 });
 

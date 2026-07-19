@@ -37,6 +37,12 @@ export interface Settings {
   contextSoftThreshold: string;
   contextTargetRatio: string;
   memoryBatchSize: string;
+  embeddingEnabled: boolean;
+  remoteEmbeddingConsent: boolean;
+  embeddingBaseUrl: string;
+  embeddingModel: string;
+  embeddingDimension: string;
+  embeddingBatchSize: string;
   temperature: string;
   autoSpeak: boolean;
   agentEnabled: boolean;
@@ -75,6 +81,8 @@ export interface Dashboard {
   toolExecutions: number;
   approvals: number;
   capabilityGrants: number;
+  embeddings: number;
+  embeddingJobs: number;
   databasePath: string;
 }
 
@@ -191,6 +199,7 @@ export interface PetApi {
   getDashboard(): Promise<Dashboard>;
   consolidate(date?: string): Promise<Record<string, unknown>>;
   scanTopics(): Promise<{ candidateIds: string[]; adjudications: Record<string, unknown>[] }>;
+  reindexEmbeddings(): Promise<{ queued: number; processed: number; failed: number }>;
   evaluateContinuity(): Promise<{ runId: string; recommendation: { action: string; safe: boolean } }>;
   continuityProfileAction(payload: { action: "stage" | "promote"; profileId: string }): Promise<{ applied: boolean; reason?: string }>;
   openExternal(url: string): Promise<void>;
