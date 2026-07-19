@@ -56,8 +56,10 @@ export function ChatPanel({
   const [deep, setDeep] = useState(false);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [sessionContext, setSessionContext] = useState<{ sessionId: string; x: number; y: number } | null>(null);
+  const [renameDialog, setRenameDialog] = useState<{ sessionId: string; originalTitle: string; title: string } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sessionPickerRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const stickToBottomRef = useRef(true);
   const initializedRef = useRef(false);
   const interactionLocked = busy || switchingSession;
@@ -69,7 +71,17 @@ export function ChatPanel({
     setDeep(false);
     setSessionOpen(false);
     setSessionContext(null);
+    setRenameDialog(null);
   }, [currentSessionId]);
+
+  useEffect(() => {
+    if (!renameDialog) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [renameDialog?.sessionId]);
 
   useEffect(() => {
     const list = listRef.current;
@@ -133,12 +145,28 @@ export function ChatPanel({
   const currentSession = sessions.find((session) => session.id === currentSessionId);
   const contextSession = sessions.find((session) => session.id === sessionContext?.sessionId);
 
-  const renameContextSession = async () => {
+  const openRenameDialog = () => {
     if (!contextSession) return;
+    setRenameDialog({
+      sessionId: contextSession.id,
+      originalTitle: contextSession.title,
+      title: contextSession.title,
+    });
     setSessionContext(null);
-    const title = window.prompt("输入新的会话名称", contextSession.title)?.trim();
-    if (!title || title === contextSession.title) return;
-    await onSessionRename(contextSession.id, title);
+    setSessionOpen(false);
+  };
+
+  const submitRename = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!renameDialog) return;
+    const title = renameDialog.title.trim();
+    if (!title || title === renameDialog.originalTitle) {
+      setRenameDialog(null);
+      return;
+    }
+    const sessionId = renameDialog.sessionId;
+    setRenameDialog(null);
+    await onSessionRename(sessionId, title);
   };
 
   const deleteContextSession = async () => {
@@ -213,7 +241,7 @@ export function ChatPanel({
                   style={{ left: sessionContext.x, top: sessionContext.y }}
                   onContextMenu={(event) => event.preventDefault()}
                 >
-                  <button type="button" role="menuitem" onClick={() => void renameContextSession()}>
+                  <button type="button" role="menuitem" onClick={openRenameDialog}>
                     <Pencil size={14} />
                     重命名
                   </button>
@@ -236,6 +264,38 @@ export function ChatPanel({
           深度回忆
         </button>
       </header>
+
+      {renameDialog && (
+        <div
+          className="session-dialog-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setRenameDialog(null);
+          }}
+        >
+          <form className="session-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="session-rename-title" onSubmit={submitRename}>
+            <h2 id="session-rename-title">重命名会话</h2>
+            <label htmlFor="session-rename-input">会话名称</label>
+            <input
+              ref={renameInputRef}
+              id="session-rename-input"
+              value={renameDialog.title}
+              maxLength={80}
+              onChange={(event) => setRenameDialog((current) => current ? { ...current, title: event.target.value } : null)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setRenameDialog(null);
+                }
+              }}
+            />
+            <div className="session-dialog-actions">
+              <button type="button" onClick={() => setRenameDialog(null)}>取消</button>
+              <button type="submit" className="primary" disabled={!renameDialog.title.trim()}>保存</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       <div ref={listRef} className="message-list" onScroll={updateScrollPosition}>
         {messages.map((message) => {

@@ -388,6 +388,50 @@ input:checked + .toggle::after { transform: translateX(16px); }
 }
 .session-context-menu button:hover { background: var(--surface-hover); }
 .session-context-menu button.danger { color: var(--danger, #b84b45); }
+.session-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 42%);
+}
+.session-rename-dialog {
+  display: grid;
+  width: min(380px, 100%);
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 20px 60px var(--shadow);
+}
+.session-rename-dialog h2 { margin: 0; color: var(--ink); font-size: 18px; }
+.session-rename-dialog label { color: var(--secondary-text); font-size: 12px; }
+.session-rename-dialog input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: none;
+  color: var(--ink);
+  background: var(--surface-raised, var(--surface));
+}
+.session-rename-dialog input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.session-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.session-dialog-actions button {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+}
+.session-dialog-actions button.primary { border-color: var(--accent); color: var(--accent-contrast, white); background: var(--accent); }
+.session-dialog-actions button:disabled { cursor: not-allowed; opacity: .5; }
 .panel-header .message-count { color: var(--muted); font-size: 11px; }
 
 .deep-toggle, .secondary-button, .command-button {
