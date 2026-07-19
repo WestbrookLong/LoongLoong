@@ -232,6 +232,11 @@ export function SettingsView({ settings, onSaved, notify }: Props) {
               <span className="toggle" aria-hidden="true" />
             </label>
             <label className="check-field">
+              <span>启用混合检索</span>
+              <input type="checkbox" checked={form.hybridRetrievalEnabled} onChange={(event) => update("hybridRetrievalEnabled", event.target.checked)} />
+              <span className="toggle" aria-hidden="true" />
+            </label>
+            <label className="check-field">
               <span>允许发送记忆文本</span>
               <input type="checkbox" checked={form.remoteEmbeddingConsent} onChange={(event) => update("remoteEmbeddingConsent", event.target.checked)} />
               <span className="toggle" aria-hidden="true" />

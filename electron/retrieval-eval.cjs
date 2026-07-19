@@ -134,6 +134,7 @@ async function evaluateDataset(dataset, options = {}) {
   const db = await new PetDatabase(path.join(directory, "pet.db")).initialize();
   try {
     seedDataset(db, dataset);
+    if (options.prepare) await options.prepare(db, dataset);
     const session = db.getActiveSession();
     const retrieve = options.retrieve || retrieveMemory;
     const results = [];

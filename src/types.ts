@@ -43,6 +43,7 @@ export interface Settings {
   embeddingModel: string;
   embeddingDimension: string;
   embeddingBatchSize: string;
+  hybridRetrievalEnabled: boolean;
   temperature: string;
   autoSpeak: boolean;
   agentEnabled: boolean;

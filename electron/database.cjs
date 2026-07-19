@@ -708,6 +708,15 @@ class PetDatabase {
         FOREIGN KEY (retrieval_id) REFERENCES retrieval_logs(id)
       );
 
+      CREATE TABLE IF NOT EXISTS retrieval_profiles (
+        id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        config_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        activated_at TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS agent_tasks (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -1070,6 +1079,7 @@ class PetDatabase {
       embeddingModel: "text-embedding-v4",
       embeddingDimension: "1024",
       embeddingBatchSize: "10",
+      hybridRetrievalEnabled: "true",
       temperature: "0.7",
       autoSpeak: "true",
       agentEnabled: "true",
@@ -1093,6 +1103,15 @@ class PetDatabase {
        VALUES ('aliyun-text-embedding-v4-1024-v1', 'aliyun', 'dashscope-native',
         'text-embedding-v4', 1024, 'pet-memory-document-v1', '{}', 'active', $now, $now)`,
       { $now: stamp },
+    );
+    this.db.run(
+      `INSERT OR IGNORE INTO retrieval_profiles
+       (id, version, config_json, status, created_at, activated_at)
+       VALUES ('hybrid-rrf-v1', 'memory-retrieval-v3', $config, 'active', $now, $now)`,
+      {
+        $config: JSON.stringify({ rrf_k: 60, weights: { lexical: 1.2, semantic: 1.1, structural: 0.6 }, semantic_floor: 0.15 }),
+        $now: stamp,
+      },
     );
     this.db.run(
       `INSERT OR IGNORE INTO continuity_state

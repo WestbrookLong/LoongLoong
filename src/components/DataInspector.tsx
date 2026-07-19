@@ -54,6 +54,7 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
     { id: "embeddings", label: "向量索引" },
     { id: "embedding_jobs", label: "索引任务" },
     { id: "memory_object_policies", label: "记忆策略" },
+    { id: "retrieval_profiles", label: "检索 Profile" },
   ],
 };
 
@@ -312,6 +313,12 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "surface_policy", label: "注入策略", width: "120px" },
     { key: "embedding_policy", label: "向量策略", width: "120px" },
     { key: "reason", label: "原因" },
+  ],
+  retrieval_profiles: [
+    { key: "status", label: "状态", width: "90px" },
+    { key: "id", label: "Profile" },
+    { key: "version", label: "检索版本", width: "160px" },
+    { key: "config_json", label: "参数" },
   ],
 };
 

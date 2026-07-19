@@ -139,6 +139,7 @@ function publicSettings() {
     agentEnabled: settings.agentEnabled === "true",
     embeddingEnabled: settings.embeddingEnabled === "true",
     remoteEmbeddingConsent: settings.remoteEmbeddingConsent === "true",
+    hybridRetrievalEnabled: settings.hybridRetrievalEnabled === "true",
     agentDirectoryGrants: activeGrants(db),
     hasApiKey: Boolean(getApiKey()),
   };
@@ -399,7 +400,7 @@ async function handleChat(payload, onDelta = null) {
      selected_open_loop_ids_json = $loopIds WHERE id = $id`,
     {
       $id: retrieval.id,
-      $scoreVersion: `memory-retrieval-v2+${continuityRoute.routerVersion}+continuity-value-v1`,
+      $scoreVersion: `${retrieval.hybrid ? "memory-retrieval-v3" : "memory-retrieval-v2"}+${continuityRoute.routerVersion}+continuity-value-v1`,
       $route: JSON.stringify(continuityRoute),
       $topicIds: JSON.stringify(continuity.topicIds),
       $itemIds: JSON.stringify(continuity.topicItemIds),
@@ -751,6 +752,10 @@ function records({ type, search = "", limit = 200 } = {}) {
       sql: `SELECT object_type || ':' || object_id AS id, * FROM memory_object_policies
             WHERE object_id LIKE $query OR object_type LIKE $query OR surface_policy LIKE $query OR embedding_policy LIKE $query
             ORDER BY updated_at DESC LIMIT $limit`,
+    },
+    retrieval_profiles: {
+      sql: `SELECT * FROM retrieval_profiles WHERE id LIKE $query OR version LIKE $query OR status LIKE $query
+            ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at DESC LIMIT $limit`,
     },
   };
   const definition = definitions[type];
