@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -11,6 +12,14 @@ from typing import Any, Awaitable, Callable
 from .security import SecurityError, is_sensitive_path
 
 ApprovalHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+def _absolute_path(path: Path) -> Path:
+    """Return a stable absolute path even when Windows cannot resolve a missing leaf."""
+    try:
+        return path.resolve(strict=False)
+    except OSError:
+        return Path(os.path.abspath(path))
 
 
 @dataclass
@@ -77,7 +86,7 @@ class CapabilityPolicy:
         if lowered.startswith(("\\\\.\\", "\\\\?\\", "\\\\")):
             raise SecurityError("Device, extended-length, and network-share paths are not supported.")
         path = Path(raw)
-        return (path if path.is_absolute() else self.workspace_root / path).resolve(strict=False)
+        return _absolute_path(path if path.is_absolute() else self.workspace_root / path)
 
     def _workspace_contains(self, target: Path) -> bool:
         try:
@@ -133,7 +142,7 @@ class CapabilityPolicy:
         response = await self.approval_handler(request)
         if response.get("decision") != "approve":
             return Authorization(False, approval_id=approval_id, error=f"User {response.get('decision', 'denied')} the request.")
-        root = Path(response.get("root_path") or suggested_root).resolve(strict=False)
+        root = _absolute_path(Path(response.get("root_path") or suggested_root))
         try:
             target.relative_to(root)
         except ValueError:

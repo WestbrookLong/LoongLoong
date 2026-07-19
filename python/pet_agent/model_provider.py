@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
@@ -23,6 +24,20 @@ class ModelStep:
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
+
+
+async def _iter_utf8_lines(response: httpx.Response) -> AsyncIterator[str]:
+    """Decode SSE bytes as UTF-8 regardless of an incorrect/missing charset header."""
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    pending = ""
+    async for chunk in response.aiter_bytes():
+        pending += decoder.decode(chunk)
+        while "\n" in pending:
+            line, pending = pending.split("\n", 1)
+            yield line.removesuffix("\r")
+    pending += decoder.decode(b"", final=True)
+    if pending:
+        yield pending.removesuffix("\r")
 
 
 def parse_sse_payloads(lines: list[str]) -> ModelStep:
@@ -87,7 +102,7 @@ class OpenAICompatibleProvider:
             result = ModelStep()
             reasoning_stream = SurrogateStream()
             content_stream = SurrogateStream()
-            async for line in response.aiter_lines():
+            async for line in _iter_utf8_lines(response):
                 if not line.startswith("data:"):
                     continue
                 data = line[5:].strip()

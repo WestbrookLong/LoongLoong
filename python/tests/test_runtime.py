@@ -128,6 +128,47 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("approval_required", [event["type"] for event in events])
             self.assertIn("approval_resolved", [event["type"] for event in events])
 
+    async def test_unicode_external_read_and_write_use_manual_approval(self):
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as external:
+            approved_root = Path(external, "外部目录", "精神分析实践")
+            approved_root.mkdir(parents=True)
+            source = approved_root / "杂记.md"
+            destination = approved_root / "新笔记.md"
+            source.write_text("可读取的中文内容", encoding="utf-8")
+            approvals = ApprovalInbox()
+            events = []
+
+            def emit(event):
+                events.append(event)
+                if event.get("type") == "approval_required":
+                    approvals.resolve(event["approval_id"], {
+                        "decision": "approve", "root_path": str(approved_root), "scope": "task",
+                        "expires_at": 4_000_000_000,
+                    })
+
+            runtime = AgentRuntime({
+                "workspace_root": workspace, "base_url": "https://example.com/v1", "api_key": "test", "model": "test",
+                "messages": [{"role": "system", "content": "system"}], "max_steps": 3, "timeout_seconds": 30,
+            }, emit, threading.Event(), approvals)
+            runtime.provider = FakeProvider([
+                ModelStep(tool_calls=[
+                    ToolCall("call_read", "filesystem_read", json.dumps({"path": str(source)}, ensure_ascii=False)),
+                    ToolCall("call_write", "filesystem_write", json.dumps({
+                        "path": str(destination), "content": "审批后的写入内容",
+                    }, ensure_ascii=False)),
+                ], finish_reason="tool_calls"),
+                ModelStep(content="done", finish_reason="stop"),
+            ])
+
+            result = await runtime.run()
+            approval_events = [event for event in events if event.get("type") == "approval_required"]
+            self.assertEqual(
+                [Path(event["requested_path"]) for event in approval_events],
+                [source.resolve(strict=False), destination.resolve(strict=False)],
+            )
+            self.assertTrue(all(receipt["result"]["ok"] for receipt in result["receipts"]), result["receipts"])
+            self.assertEqual(destination.read_text(encoding="utf-8"), "审批后的写入内容")
+
     async def test_write_requires_approval_and_is_atomic(self):
         with tempfile.TemporaryDirectory() as workspace:
             target = Path(workspace, "output.txt")

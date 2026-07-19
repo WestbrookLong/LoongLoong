@@ -55,9 +55,9 @@ class ModelProviderStreamingTests(unittest.IsolatedAsyncioTestCase):
         class FakeResponse:
             status_code = 200
 
-            async def aiter_lines(self):
+            async def aiter_bytes(self):
                 for line in lines:
-                    yield line
+                    yield (line + "\n").encode("utf-8", "surrogatepass")
 
             async def aclose(self):
                 return None
@@ -88,6 +88,46 @@ class ModelProviderStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.request_json["messages"][0]["content"], "before�after")
         self.assertEqual(result.reasoning_content, "💁")
         self.assertEqual(events, [{"type": "reasoning_delta", "text": "💁"}])
+
+    async def test_stream_decodes_unicode_tool_path_as_utf8_despite_wrong_charset(self):
+        path = r"D:\Users\WESTBROOK\Obsidian Vault\Obsidian_Note\精神分析实践\Thought\杂记.md"
+        payload = {
+            "choices": [{"delta": {"tool_calls": [{
+                "index": 0, "id": "call_1",
+                "function": {"name": "filesystem_read", "arguments": json.dumps({"path": path}, ensure_ascii=False)},
+            }]}, "finish_reason": "tool_calls"}],
+        }
+        raw = ("data: " + json.dumps(payload, ensure_ascii=False) + "\r\ndata: [DONE]\r\n").encode("utf-8")
+
+        class FakeResponse:
+            status_code = 200
+            encoding = "iso-8859-1"
+
+            async def aiter_bytes(self):
+                for offset in range(0, len(raw), 7):
+                    yield raw[offset:offset + 7]
+
+            async def aclose(self):
+                return None
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            def build_request(self, _method, _url, **kwargs):
+                return kwargs
+
+            async def send(self, _request, **_kwargs):
+                return FakeResponse()
+
+        provider = OpenAICompatibleProvider(base_url="https://example.com/v1", api_key="test", model="test")
+        with patch("pet_agent.model_provider.httpx.AsyncClient", return_value=FakeClient()):
+            result = await provider.stream_step([{"role": "user", "content": path}], [], lambda _event: None)
+
+        self.assertEqual(json.loads(result.tool_calls[0].arguments_text)["path"], path)
 
 
 if __name__ == "__main__":
