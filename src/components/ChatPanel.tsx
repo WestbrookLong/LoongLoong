@@ -1,6 +1,6 @@
-import { ArrowUp, Mic, Search, Square } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, Mic, Search, Square } from "lucide-react";
 import { FormEvent, KeyboardEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
-import type { Message, StreamingResponse } from "../types";
+import type { Message, Session, StreamingResponse } from "../types";
 import { ReasoningPanel } from "./ReasoningPanel";
 import { AgentActivityList } from "./AgentActivityList";
 import { AgentApprovalCards } from "./AgentApprovalCard";
@@ -11,16 +11,27 @@ const MarkdownMessage = lazy(() => import("./MarkdownMessage").then((module) => 
 
 interface Props {
   messages: Message[];
+  sessions: Session[];
+  currentSessionId: string;
   busy: boolean;
+  switchingSession: boolean;
   streamingResponse: StreamingResponse | null;
   onSend: (text: string, deep?: boolean) => Promise<void>;
   onMic: () => void;
   onCancel: () => void;
+  onSessionSelect: (sessionId: string) => void;
   onResolveApproval: (approvalId: string, decision: "approve" | "deny", scope?: "once" | "task", chooseDirectory?: boolean) => void;
 }
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatSessionTime(value?: string) {
+  if (!value) return "";
+  return new Date(value).toLocaleString("zh-CN", {
+    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
 }
 
 function messageReasoning(message: Message) {
@@ -35,12 +46,26 @@ function messageReasoning(message: Message) {
   }
 }
 
-export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, onCancel, onResolveApproval }: Props) {
+export function ChatPanel({
+  messages, sessions, currentSessionId, busy, switchingSession, streamingResponse,
+  onSend, onMic, onCancel, onSessionSelect, onResolveApproval,
+}: Props) {
   const [text, setText] = useState("");
   const [deep, setDeep] = useState(false);
+  const [sessionOpen, setSessionOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const sessionPickerRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const initializedRef = useRef(false);
+  const interactionLocked = busy || switchingSession;
+
+  useEffect(() => {
+    initializedRef.current = false;
+    stickToBottomRef.current = true;
+    setText("");
+    setDeep(false);
+    setSessionOpen(false);
+  }, [currentSessionId]);
 
   useEffect(() => {
     const list = listRef.current;
@@ -54,7 +79,23 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, on
       initializedRef.current = true;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages.length, busy, streamingResponse?.reasoningContent.length, streamingResponse?.content.length, streamingResponse?.activities.length, streamingResponse?.approvals.length]);
+  }, [currentSessionId, messages.length, busy, streamingResponse?.reasoningContent.length, streamingResponse?.content.length, streamingResponse?.activities.length, streamingResponse?.approvals.length]);
+
+  useEffect(() => {
+    if (!sessionOpen) return undefined;
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!sessionPickerRef.current?.contains(event.target as Node)) setSessionOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setSessionOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [sessionOpen]);
 
   const updateScrollPosition = () => {
     const list = listRef.current;
@@ -65,7 +106,7 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, on
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
     const value = text.trim();
-    if (!value || busy) return;
+    if (!value || interactionLocked) return;
     stickToBottomRef.current = true;
     setText("");
     await onSend(value, deep);
@@ -79,12 +120,56 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, on
     }
   };
 
+  const currentSession = sessions.find((session) => session.id === currentSessionId);
+
   return (
     <section className="chat-panel">
       <header className="panel-header">
-        <div>
-          <h1>对话</h1>
-          <span>{messages.length} 条消息</span>
+        <div className="chat-header-left">
+          <div className="session-title-row">
+            <h1>对话</h1>
+            <div className="session-picker" ref={sessionPickerRef}>
+              <button
+                type="button"
+                className={`session-picker-trigger ${sessionOpen ? "open" : ""}`}
+                aria-haspopup="listbox"
+                aria-expanded={sessionOpen}
+                disabled={interactionLocked}
+                onClick={() => setSessionOpen((value) => !value)}
+              >
+                <span>{switchingSession ? "正在切换…" : currentSession?.title || "历史会话"}</span>
+                <ChevronDown size={14} />
+              </button>
+              {sessionOpen && (
+                <div className="session-menu" role="listbox" aria-label="历史会话">
+                  {sessions.map((session) => {
+                    const active = session.id === currentSessionId;
+                    return (
+                      <button
+                        type="button"
+                        className={`session-option ${active ? "active" : ""}`}
+                        key={session.id}
+                        role="option"
+                        aria-selected={active}
+                        onClick={() => {
+                          setSessionOpen(false);
+                          if (!active) onSessionSelect(session.id);
+                        }}
+                      >
+                        <span className="session-option-check">{active && <Check size={14} />}</span>
+                        <span className="session-option-body">
+                          <strong>{session.title}</strong>
+                          <small>{formatSessionTime(session.last_message_at || session.started_at)} · {session.message_count} 条消息</small>
+                          {session.preview && <span>{session.preview.replace(/\s+/g, " ")}</span>}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+          <span className="message-count">{messages.length} 条消息</span>
         </div>
         <button
           className={`deep-toggle ${deep ? "active" : ""}`}
@@ -148,16 +233,16 @@ export function ChatPanel({ messages, busy, streamingResponse, onSend, onMic, on
           rows={1}
           placeholder="输入消息"
           aria-label="输入消息"
-          disabled={busy}
+          disabled={interactionLocked}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={onKeyDown}
         />
-        <button type="button" className="composer-icon" title="语音输入" onClick={onMic} disabled={busy}>
+        <button type="button" className="composer-icon" title="语音输入" onClick={onMic} disabled={interactionLocked}>
           <Mic size={19} />
         </button>
         {busy
           ? <button type="button" className="send-button cancel-run" title="停止 Agent" onClick={onCancel}><Square size={15} /></button>
-          : <button type="submit" className="send-button" title="发送" disabled={!text.trim()}><ArrowUp size={19} /></button>}
+          : <button type="submit" className="send-button" title="发送" disabled={interactionLocked || !text.trim()}><ArrowUp size={19} /></button>}
       </form>
     </section>
   );

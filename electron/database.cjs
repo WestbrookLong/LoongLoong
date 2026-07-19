@@ -1106,6 +1106,42 @@ class PetDatabase {
     return this.get("SELECT * FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1");
   }
 
+  listSessions(limit = 100) {
+    const safeLimit = Math.min(200, Math.max(1, Number(limit) || 100));
+    return this.all(
+      `SELECT s.*,
+              COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.session_id = s.id), s.started_at) AS last_message_at,
+              COALESCE((SELECT m.content FROM messages m WHERE m.session_id = s.id ORDER BY m.created_at DESC LIMIT 1), '') AS preview
+       FROM sessions s
+       ORDER BY last_message_at DESC, s.started_at DESC
+       LIMIT $limit`,
+      { $limit: safeLimit },
+    );
+  }
+
+  messagesForSession(sessionId, limit = 100) {
+    const safeLimit = Math.min(500, Math.max(1, Number(limit) || 100));
+    return this.all(
+      `SELECT * FROM messages WHERE session_id = $sessionId
+       ORDER BY created_at DESC LIMIT $limit`,
+      { $sessionId: sessionId, $limit: safeLimit },
+    ).reverse();
+  }
+
+  activateSession(sessionId) {
+    const selected = this.get("SELECT * FROM sessions WHERE id = $id", { $id: sessionId });
+    if (!selected) throw new Error("会话不存在或已被删除。");
+    const now = isoNow();
+    this.transaction(() => {
+      this.db.run(
+        "UPDATE sessions SET ended_at = $endedAt WHERE ended_at IS NULL AND id != $id",
+        { $id: sessionId, $endedAt: now },
+      );
+      this.db.run("UPDATE sessions SET ended_at = NULL WHERE id = $id", { $id: sessionId });
+    });
+    return this.get("SELECT * FROM sessions WHERE id = $id", { $id: sessionId });
+  }
+
   getSettings() {
     const rows = this.all("SELECT key, value FROM app_settings");
     return Object.fromEntries(rows.map((row) => [row.key, row.value]));

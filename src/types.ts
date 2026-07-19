@@ -19,6 +19,8 @@ export interface Session {
   started_at: string;
   ended_at?: string;
   message_count: number;
+  last_message_at?: string;
+  preview?: string;
 }
 
 export interface Settings {
@@ -80,6 +82,7 @@ export interface Bootstrap {
   settings: Settings;
   session: Session;
   messages: Message[];
+  sessions: Session[];
   dashboard: Dashboard;
 }
 
@@ -93,6 +96,7 @@ export interface ChatResult {
     selectedEventIds: string[];
   };
   dashboard: Dashboard;
+  sessions: Session[];
 }
 
 export interface ChatStreamEvent {
@@ -171,14 +175,15 @@ export interface VoicePayload {
 
 export interface PetApi {
   bootstrap(): Promise<Bootstrap>;
-  sendMessage(payload: { requestId: string; text: string; modality: "text" | "voice"; deep?: boolean }): Promise<ChatResult>;
+  sendMessage(payload: { requestId: string; sessionId: string; text: string; modality: "text" | "voice"; deep?: boolean }): Promise<ChatResult>;
   cancelChat(requestId: string): Promise<{ cancelled: boolean }>;
   resolveAgentApproval(payload: { requestId: string; approvalId: string; decision: "approve" | "deny"; scope?: "once" | "task"; chooseDirectory?: boolean }): Promise<{ resolved: boolean; decision: string }>;
   agentRuntimeHealth(): Promise<{ ok: boolean; runtime_version: string; protocol: number; mode: string; capabilities: string[] }>;
   addAgentDirectory(): Promise<{ cancelled: boolean; grants: DirectoryGrant[] }>;
   revokeAgentGrant(id: string): Promise<{ grants: DirectoryGrant[] }>;
   onChatStream(callback: (event: ChatStreamEvent) => void): () => void;
-  newChat(): Promise<{ session: Session; messages: Message[] }>;
+  newChat(): Promise<{ session: Session; messages: Message[]; sessions: Session[] }>;
+  switchSession(sessionId: string): Promise<{ session: Session; messages: Message[]; sessions: Session[] }>;
   transcribe(payload: VoicePayload): Promise<{ text: string }>;
   getRecords(payload: { type: string; search?: string; limit?: number }): Promise<Record<string, unknown>[]>;
   getDashboard(): Promise<Dashboard>;

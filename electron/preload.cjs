@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("pet", {
     return () => ipcRenderer.removeListener("chat:stream", listener);
   },
   newChat: () => ipcRenderer.invoke("chat:new"),
+  switchSession: (sessionId) => ipcRenderer.invoke("chat:switch", sessionId),
   transcribe: (payload) => ipcRenderer.invoke("voice:transcribe", payload),
   getRecords: (payload) => ipcRenderer.invoke("data:records", payload),
   getDashboard: () => ipcRenderer.invoke("data:dashboard"),

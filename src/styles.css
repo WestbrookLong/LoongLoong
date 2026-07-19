@@ -299,6 +299,71 @@ input:checked + .toggle::after { transform: translateX(16px); }
 .inspector-header .inspector-actions { align-items: center; }
 .panel-header span, .settings-header span { color: var(--muted); font-size: 12px; }
 
+.panel-header { position: relative; z-index: 5; }
+.panel-header .chat-header-left { min-width: 0; align-items: flex-start; flex-direction: column; gap: 3px; }
+.session-title-row { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.session-picker { position: relative; min-width: 0; }
+.session-picker-trigger {
+  display: flex;
+  width: min(230px, 28vw);
+  height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 8px 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--secondary-text);
+  background: transparent;
+  cursor: pointer;
+}
+.session-picker-trigger:hover, .session-picker-trigger.open { border-color: var(--line); background: var(--surface-hover); }
+.panel-header .session-picker-trigger span { overflow: hidden; color: inherit; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.session-picker-trigger svg { flex: 0 0 auto; transition: transform 140ms ease; }
+.session-picker-trigger.open svg { transform: rotate(180deg); }
+.session-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  display: grid;
+  width: min(380px, calc(100vw - 150px));
+  max-height: min(430px, calc(100vh - 150px));
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: 0 16px 42px var(--shadow);
+}
+.session-option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 5px;
+  width: 100%;
+  padding: 9px 10px 9px 6px;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+.session-option:hover { background: var(--surface-hover); }
+.session-option.active { background: var(--surface-selected); }
+.session-option-check { display: grid; place-items: start center; padding-top: 2px; color: var(--teal) !important; }
+.session-option-body { display: grid; min-width: 0; gap: 2px; }
+.session-option-body strong { overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.panel-header .session-option-body small { color: var(--muted); font-size: 10px; }
+.panel-header .session-option-body > span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--secondary-text);
+  font-size: 11px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.panel-header .message-count { color: var(--muted); font-size: 11px; }
+
 .deep-toggle, .secondary-button, .command-button {
   display: inline-flex;
   min-height: 36px;

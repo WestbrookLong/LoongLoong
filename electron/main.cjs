@@ -227,13 +227,7 @@ async function agentCompletion({ requestId, settings, apiKey, messages, sessionI
 function activeMessages(limit = 100) {
   const active = db.getActiveSession();
   if (!active) return [];
-  return db
-    .all(
-      `SELECT * FROM messages WHERE session_id = $sessionId
-       ORDER BY created_at DESC LIMIT $limit`,
-      { $sessionId: active.id, $limit: limit },
-    )
-    .reverse();
+  return db.messagesForSession(active.id, limit);
 }
 
 function createSession() {
@@ -251,7 +245,16 @@ function createSession() {
     modality: "system",
   });
   db.log("info", "session", "创建新对话。", { sessionId: id });
-  return { session: db.getActiveSession(), messages: activeMessages() };
+  return { session: db.getActiveSession(), messages: activeMessages(), sessions: db.listSessions() };
+}
+
+function switchSession(sessionId) {
+  const id = String(sessionId || "").trim();
+  if (!id) throw new Error("会话 ID 不能为空。");
+  const session = db.activateSession(id);
+  const messages = db.messagesForSession(id);
+  db.log("info", "session", "切换历史会话。", { sessionId: id });
+  return { session, messages, sessions: db.listSessions() };
 }
 
 function inferActivity(text) {
@@ -265,6 +268,9 @@ async function handleChat(payload, onDelta = null) {
   if (!text) throw new Error("消息不能为空。");
   const modality = payload?.modality === "voice" ? "voice" : "text";
   const sessionRow = db.getActiveSession() || createSession().session;
+  if (payload?.sessionId && String(payload.sessionId) !== sessionRow.id) {
+    throw new Error("当前会话已经切换，请在目标会话中重新发送消息。");
+  }
   const correctionSignal = /(?:你记错了|记忆错了|不是这样|我没说过|我不是这个意思|理解错了|you remembered wrong|I never said|that's not what I meant)/i.test(text);
   if (correctionSignal) {
     const previousRetrieval = db.get(
@@ -483,7 +489,7 @@ async function handleChat(payload, onDelta = null) {
         return extraction;
       });
     }
-    return { userMessage, assistantMessage, retrieval, dashboard: dashboard() };
+    return { userMessage, assistantMessage, retrieval, dashboard: dashboard(), sessions: db.listSessions() };
   } catch (error) {
     if (error.code === "AGENT_CANCELLED") {
       const assistantMessage = db.addMessage({
@@ -494,7 +500,7 @@ async function handleChat(payload, onDelta = null) {
         metadata: { retrievalId: retrieval.id, agentRunId: String(payload?.requestId || ""), cancelled: true },
       });
       db.log("info", "agent", "用户停止了 Agent 任务。", { sessionId: sessionRow.id, requestId: payload?.requestId });
-      return { userMessage, assistantMessage, retrieval, dashboard: dashboard() };
+      return { userMessage, assistantMessage, retrieval, dashboard: dashboard(), sessions: db.listSessions() };
     }
     db.log("error", "chat", "模型回复失败。", {
       sessionId: sessionRow.id,
@@ -693,6 +699,7 @@ function registerIpc() {
     settings: publicSettings(),
     session: db.getActiveSession(),
     messages: activeMessages(),
+    sessions: db.listSessions(),
     dashboard: dashboard(),
   }));
   ipcMain.handle("chat:send", (event, payload) => {
@@ -774,6 +781,10 @@ function registerIpc() {
     }
   });
   ipcMain.handle("chat:new", () => createSession());
+  ipcMain.handle("chat:switch", (_event, sessionId) => {
+    if (agentSidecar.runs.size) throw new Error("Agent 正在运行，请先停止当前回答再切换会话。");
+    return switchSession(sessionId);
+  });
   ipcMain.handle("app:open-external", async (_event, value) => {
     const url = new URL(String(value || ""));
     if (!["http:", "https:", "mailto:"].includes(url.protocol)) throw new Error("不支持的链接协议。");
