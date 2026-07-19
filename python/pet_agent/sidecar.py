@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+if hasattr(sys.stdin, "reconfigure"):
+    sys.stdin.reconfigure(encoding="utf-8", errors="strict")
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="strict")
 if hasattr(sys.stderr, "reconfigure"):
@@ -27,7 +29,7 @@ else:
 
 WRITE_LOCK = threading.Lock()
 PROTOCOL_VERSION = 2
-RUNTIME_VERSION = "2.0.0"
+RUNTIME_VERSION = "2.1.1"
 
 
 @dataclass
@@ -64,7 +66,7 @@ def main() -> None:
     emit({
         "type": "ready", "pid": os.getpid(), "protocol": PROTOCOL_VERSION,
         "runtime_version": RUNTIME_VERSION,
-        "capabilities": ["approvals", "external_read", "filesystem_write", "process_execute", "web_fallback"],
+        "capabilities": ["approvals", "external_read", "filesystem_write", "process_execute", "web_fallback", "known_path_grounding", "path_references"],
     })
     for raw in sys.stdin:
         try:

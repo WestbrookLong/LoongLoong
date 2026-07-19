@@ -7,7 +7,10 @@ from typing import Any, AsyncIterator, Callable
 
 import httpx
 
-from .unicode_safety import SurrogateStream, repair_surrogates, repair_value
+from .unicode_safety import (
+    ModelTextStream, extract_windows_paths, repair_known_paths, repair_surrogates,
+    repair_utf8_mojibake, repair_value,
+)
 
 
 @dataclass
@@ -69,9 +72,30 @@ def parse_sse_payloads(lines: list[str]) -> ModelStep:
     result.tool_calls = [ToolCall(
         repair_surrogates(value["id"] or f"call_{index}"),
         repair_surrogates(value["name"]),
-        repair_surrogates(value["arguments"]),
+        repair_utf8_mojibake(repair_surrogates(value["arguments"])),
     ) for index, value in sorted(calls.items())]
     return result
+
+
+def _repair_arguments_text(value: str, known_paths: list[str]) -> str:
+    repaired = repair_utf8_mojibake(repair_surrogates(value))
+    if not known_paths:
+        return repaired
+    try:
+        payload = json.loads(repaired)
+    except json.JSONDecodeError:
+        return repair_known_paths(repaired, known_paths)
+
+    def ground(item: Any) -> Any:
+        if isinstance(item, str):
+            return repair_known_paths(repair_utf8_mojibake(item), known_paths)
+        if isinstance(item, list):
+            return [ground(child) for child in item]
+        if isinstance(item, dict):
+            return {key: ground(child) for key, child in item.items()}
+        return item
+
+    return json.dumps(ground(payload), ensure_ascii=False, separators=(",", ":"))
 
 
 class OpenAICompatibleProvider:
@@ -88,7 +112,13 @@ class OpenAICompatibleProvider:
             "parallel_tool_calls": False, "temperature": self.temperature, "stream": True,
             "stream_options": {"include_usage": True}, "enable_thinking": True,
         })
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json; charset=utf-8"}
+        known_paths: list[str] = []
+        for message in reversed(messages):
+            if message.get("role") == "user" and isinstance(message.get("content"), str):
+                known_paths = extract_windows_paths(message["content"])
+                if known_paths:
+                    break
         async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=20), follow_redirects=False) as client:
             response = await client.send(client.build_request("POST", self.url, headers=headers, json=body), stream=True)
             if response.status_code == 400:
@@ -100,8 +130,8 @@ class OpenAICompatibleProvider:
                 raise RuntimeError(f"Model API returned HTTP {response.status_code}: {raw}")
             calls: dict[int, dict[str, str]] = {}
             result = ModelStep()
-            reasoning_stream = SurrogateStream()
-            content_stream = SurrogateStream()
+            reasoning_stream = ModelTextStream(known_paths)
+            content_stream = ModelTextStream(known_paths)
             async for line in _iter_utf8_lines(response):
                 if not line.startswith("data:"):
                     continue
@@ -141,6 +171,10 @@ class OpenAICompatibleProvider:
             result.tool_calls = [ToolCall(
                 repair_surrogates(value["id"] or f"call_{index}"),
                 repair_surrogates(value["name"]),
-                repair_surrogates(value["arguments"]),
+                _repair_arguments_text(value["arguments"], known_paths),
             ) for index, value in sorted(calls.items())]
+            # Final invariant: persisted reasoning/answer text must use exact paths from
+            # the current user message even if an upstream stream lost legacy bytes.
+            result.reasoning_content = repair_known_paths(result.reasoning_content, known_paths)
+            result.content = repair_known_paths(result.content, known_paths)
             return result

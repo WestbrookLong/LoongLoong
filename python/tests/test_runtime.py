@@ -128,6 +128,47 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("approval_required", [event["type"] for event in events])
             self.assertIn("approval_resolved", [event["type"] for event in events])
 
+    async def test_path_reference_and_lossy_model_path_resolve_before_execution(self):
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as external:
+            directory = Path(external, "精神分析实践", "Thought")
+            directory.mkdir(parents=True)
+            target = directory / "杂记.md"
+            target.write_text("grounded path content", encoding="utf-8")
+            corrupted = target.as_posix().replace("/", "\\").encode("utf-8").decode("cp1252", "replace")
+            approvals = ApprovalInbox()
+            events = []
+
+            def emit(event):
+                events.append(event)
+                if event.get("type") == "approval_required":
+                    approvals.resolve(event["approval_id"], {
+                        "decision": "approve", "root_path": str(directory), "scope": "task",
+                    })
+
+            runtime = AgentRuntime({
+                "workspace_root": workspace, "base_url": "https://example.com/v1", "api_key": "test", "model": "test",
+                "messages": [
+                    {"role": "system", "content": "system"},
+                    {"role": "user", "content": f"读取 {target}"},
+                    {"role": "assistant", "content": "我再试一下。"},
+                    {"role": "user", "content": "这是中文路径这个文件，你重新试一下"},
+                ],
+                "max_steps": 3, "timeout_seconds": 30,
+            }, emit, threading.Event(), approvals)
+            runtime.provider = FakeProvider([
+                ModelStep(tool_calls=[
+                    ToolCall("call_ref", "filesystem_read", json.dumps({"path": "path_ref_1"})),
+                    ToolCall("call_mojibake", "filesystem_read", json.dumps({"path": corrupted}, ensure_ascii=False)),
+                ], finish_reason="tool_calls"),
+                ModelStep(content="done", finish_reason="stop"),
+            ])
+
+            result = await runtime.run()
+            self.assertTrue(all(item["result"]["ok"] for item in result["receipts"]), result["receipts"])
+            self.assertEqual([item["arguments"]["path"] for item in result["receipts"]], [str(target), str(target)])
+            approval = next(event for event in events if event.get("type") == "approval_required")
+            self.assertEqual(Path(approval["requested_path"]), target.resolve(strict=False))
+
     async def test_unicode_external_read_and_write_use_manual_approval(self):
         with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as external:
             approved_root = Path(external, "外部目录", "精神分析实践")

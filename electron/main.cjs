@@ -29,6 +29,14 @@ let db;
 let scheduledTimer;
 let memoryJobQueue = Promise.resolve();
 const pendingApprovals = new Map();
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) app.quit();
+app.on("second-instance", () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
 const agentSidecar = new AgentSidecar({
   onLog(level, message, context) {
     db?.log(level, "agent", message, context);
@@ -929,6 +937,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return;
   db = await new PetDatabase(path.join(dataDirectory(), "pet.db")).initialize();
   cleanMemoryQuality(db);
   registerIpc();
