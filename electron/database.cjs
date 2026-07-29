@@ -169,6 +169,8 @@ class PetDatabase {
       CREATE TABLE IF NOT EXISTS retrieval_logs (
         id TEXT PRIMARY KEY,
         session_id TEXT,
+        user_message_id TEXT,
+        assistant_message_id TEXT,
         query TEXT NOT NULL,
         mode TEXT NOT NULL,
         candidate_count INTEGER NOT NULL,
@@ -627,6 +629,20 @@ class PetDatabase {
         FOREIGN KEY (event_id) REFERENCES events(id)
       );
 
+      CREATE TABLE IF NOT EXISTS memory_governance_actions (
+        id TEXT PRIMARY KEY,
+        object_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        status TEXT NOT NULL,
+        reason TEXT,
+        before_json TEXT NOT NULL DEFAULT '{}',
+        after_json TEXT NOT NULL DEFAULT '{}',
+        source_event_id TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (source_event_id) REFERENCES events(id)
+      );
+
       CREATE TABLE IF NOT EXISTS logs (
         id TEXT PRIMARY KEY,
         level TEXT NOT NULL,
@@ -895,6 +911,7 @@ class PetDatabase {
       CREATE INDEX IF NOT EXISTS idx_embeddings_profile_status ON memory_embeddings(embedding_profile_id, status, object_type);
       CREATE INDEX IF NOT EXISTS idx_retrieval_stage_retrieval ON retrieval_stage_logs(retrieval_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_claim_neighbor_status ON claim_neighbor_candidates(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_memory_governance_object ON memory_governance_actions(object_type, object_id, created_at DESC);
     `);
 
     const ensureColumn = (table, column, definition) => {
@@ -925,6 +942,9 @@ class PetDatabase {
     ensureColumn("retrieval_logs", "selected_topic_item_ids_json", "TEXT NOT NULL DEFAULT '[]'");
     ensureColumn("retrieval_logs", "selected_open_loop_ids_json", "TEXT NOT NULL DEFAULT '[]'");
     ensureColumn("retrieval_logs", "outcome_json", "TEXT NOT NULL DEFAULT '{}'");
+    ensureColumn("retrieval_logs", "user_message_id", "TEXT");
+    ensureColumn("retrieval_logs", "assistant_message_id", "TEXT");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_retrieval_messages ON retrieval_logs(user_message_id, assistant_message_id)");
     ensureColumn("topic_threads", "continuity_score_version", "TEXT NOT NULL DEFAULT 'unknown-legacy'");
     ensureColumn("topic_threads", "continuity_components_json", "TEXT NOT NULL DEFAULT '{}'");
     ensureColumn("topic_threads", "canonical_topic_id", "TEXT");

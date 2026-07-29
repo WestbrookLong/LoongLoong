@@ -9,13 +9,14 @@
     "build": "tsc --noEmit && vite build",
     "build:sidecar": "python python/build_sidecar.py",
     "start": "electron .",
-    "test": "node --test tests/memory.test.cjs tests/model.test.cjs tests/intelligence.test.cjs tests/continuity.test.cjs tests/state-governance.test.cjs tests/topic-merge-eval.test.cjs tests/topic-semantic.test.cjs tests/claim-governance.test.cjs tests/claim-semantic.test.cjs tests/retrieval-eval.test.cjs tests/embedding.test.cjs tests/retrieval-shadow.test.cjs tests/retrieval-hybrid.test.cjs tests/retrieval-reranker.test.cjs tests/agent-audit.test.cjs tests/agent-sidecar.test.cjs tests/session.test.cjs && npm run test:agent",
+    "test": "node --test tests/memory.test.cjs tests/memory-visualization.test.cjs tests/model.test.cjs tests/intelligence.test.cjs tests/continuity.test.cjs tests/state-governance.test.cjs tests/topic-merge-eval.test.cjs tests/topic-semantic.test.cjs tests/claim-governance.test.cjs tests/claim-semantic.test.cjs tests/retrieval-eval.test.cjs tests/embedding.test.cjs tests/retrieval-shadow.test.cjs tests/retrieval-hybrid.test.cjs tests/retrieval-reranker.test.cjs tests/agent-audit.test.cjs tests/agent-sidecar.test.cjs tests/session.test.cjs && npm run test:agent",
     "test:agent": "python -m unittest discover -s python -p test_*.py",
     "eval:continuity": "node scripts/eval-continuity.cjs",
     "eval:retrieval": "node scripts/eval-retrieval.cjs",
     "eval:retrieval:hybrid": "node scripts/eval-retrieval.cjs --hybrid"
   },
   "dependencies": {
+    "cytoscape": "^3.33.1",
     "lucide-react": "0.475.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

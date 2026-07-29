@@ -26,6 +26,15 @@ const { createAgentAudit, failAgentAudit, persistAgentResult } = require("./agen
 const { activeGrants, addPersistentReadGrant, recordApprovalRequest, resolveApprovalRequest, revokeGrant } = require("./approval-broker.cjs");
 const { processEmbeddingJobs, reconcileEmbeddingIndex } = require("./embedding.cjs");
 const { discoverClaimNeighbors, processClaimNeighborCandidates } = require("./claim-semantic.cjs");
+const {
+  getMemoryDiagnostics,
+  getMemoryGraph,
+  getMemoryNodeDetail,
+  getMemoryOverview,
+  getMemoryRetrievalTrace,
+  getMemoryTimeline,
+  governMemory,
+} = require("./memory-visualization.cjs");
 
 let mainWindow;
 let db;
@@ -184,6 +193,7 @@ function dashboard() {
     embeddings: count("memory_embeddings", "WHERE status = 'ready'"),
     embeddingJobs: count("embedding_jobs", "WHERE status IN ('pending', 'running', 'failed')"),
     claimNeighborCandidates: count("claim_neighbor_candidates", "WHERE status IN ('pending_model', 'pending_review', 'failed')"),
+    memoryGovernanceActions: count("memory_governance_actions"),
     databasePath: db.filePath,
   };
 }
@@ -402,7 +412,7 @@ async function handleChat(payload, onDelta = null) {
   db.run(
     `UPDATE retrieval_logs SET score_version = $scoreVersion, route_json = $route,
      selected_topic_ids_json = $topicIds, selected_topic_item_ids_json = $itemIds,
-     selected_open_loop_ids_json = $loopIds WHERE id = $id`,
+     selected_open_loop_ids_json = $loopIds, user_message_id = $userMessageId WHERE id = $id`,
     {
       $id: retrieval.id,
       $scoreVersion: `${retrieval.hybrid ? "memory-retrieval-v3" : "memory-retrieval-v2"}+${continuityRoute.routerVersion}+continuity-value-v1`,
@@ -410,6 +420,7 @@ async function handleChat(payload, onDelta = null) {
       $topicIds: JSON.stringify(continuity.topicIds),
       $itemIds: JSON.stringify(continuity.topicItemIds),
       $loopIds: JSON.stringify(continuity.openLoopIds),
+      $userMessageId: userMessage.id,
     },
   );
   const stableSystem = `${settings.systemPrompt}\n\n你的名字是${settings.petName || "小步"}。\n使用记忆时必须遵循认识论来源：stated_by_user 才能表述为用户明确说过；observed_by_agent 表述为你的观察；inferred 必须使用不确定语气；mutually_confirmed 表述为双方曾确认；tool_verified 表述为工具验证；unknown_legacy 必须说明来源不完整。disputed 记忆必须明确仍有争议。`;
@@ -504,6 +515,10 @@ async function handleChat(payload, onDelta = null) {
         })),
       },
     });
+    db.run(
+      "UPDATE retrieval_logs SET assistant_message_id = $messageId WHERE id = $id",
+      { $id: retrieval.id, $messageId: assistantMessage.id },
+    );
     db.log("info", "chat", result.offline ? "离线模式回复完成。" : "模型回复完成。", {
       sessionId: sessionRow.id,
       retrievalId: retrieval.id,
@@ -534,6 +549,10 @@ async function handleChat(payload, onDelta = null) {
         modality: "system",
         metadata: { retrievalId: retrieval.id, agentRunId: String(payload?.requestId || ""), cancelled: true },
       });
+      db.run(
+        "UPDATE retrieval_logs SET assistant_message_id = $messageId WHERE id = $id",
+        { $id: retrieval.id, $messageId: assistantMessage.id },
+      );
       db.log("info", "agent", "用户停止了 Agent 任务。", { sessionId: sessionRow.id, requestId: payload?.requestId });
       return { userMessage, assistantMessage, retrieval, dashboard: dashboard(), sessions: db.listSessions() };
     }
@@ -774,6 +793,11 @@ function records({ type, search = "", limit = 200 } = {}) {
                OR a.canonical_text LIKE $query OR b.canonical_text LIKE $query
             ORDER BY n.updated_at DESC LIMIT $limit`,
     },
+    memory_governance_actions: {
+      sql: `SELECT * FROM memory_governance_actions
+            WHERE action LIKE $query OR object_type LIKE $query OR COALESCE(reason, '') LIKE $query
+            ORDER BY created_at DESC LIMIT $limit`,
+    },
   };
   const definition = definitions[type];
   if (!definition) throw new Error("未知的数据表类型。");
@@ -928,6 +952,13 @@ function registerIpc() {
       ? await processClaimNeighborCandidates({ db, settings, apiKey: getApiKey(), limit: 5 }) : [];
     return { candidateIds, adjudications };
   }, false));
+  ipcMain.handle("memory:atlas-overview", (_event, payload) => getMemoryOverview(db, payload || {}));
+  ipcMain.handle("memory:atlas-graph", (_event, payload) => getMemoryGraph(db, payload || {}));
+  ipcMain.handle("memory:atlas-timeline", (_event, payload) => getMemoryTimeline(db, payload || {}));
+  ipcMain.handle("memory:atlas-detail", (_event, nodeId) => getMemoryNodeDetail(db, String(nodeId || "")));
+  ipcMain.handle("memory:atlas-trace", (_event, payload) => getMemoryRetrievalTrace(db, payload || {}));
+  ipcMain.handle("memory:atlas-diagnostics", () => getMemoryDiagnostics(db));
+  ipcMain.handle("memory:atlas-govern", (_event, payload) => governMemory(db, payload || {}));
   ipcMain.handle("continuity:evaluate", () => {
     const fixtureDirectory = path.join(process.cwd(), "tests", "fixtures");
     const dataset = {
@@ -1028,6 +1059,15 @@ function createWindow() {
       setTimeout(async () => {
         try {
           mainWindow.restore();
+          const captureWidth = Number(process.env.PET_CAPTURE_WIDTH);
+          const captureHeight = Number(process.env.PET_CAPTURE_HEIGHT);
+          if (Number.isFinite(captureWidth) || Number.isFinite(captureHeight)) {
+            const [currentWidth, currentHeight] = mainWindow.getSize();
+            mainWindow.setSize(
+              Number.isFinite(captureWidth) ? Math.max(940, captureWidth) : currentWidth,
+              Number.isFinite(captureHeight) ? Math.max(680, captureHeight) : currentHeight,
+            );
+          }
           mainWindow.show();
           const routeTitle = process.env.PET_CAPTURE_ROUTE;
           if (routeTitle) {

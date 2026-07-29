@@ -1,4 +1,4 @@
-import { ArrowUp, Check, ChevronDown, Mic, Pencil, Search, Square, Trash2 } from "lucide-react";
+import { ArrowUp, BrainCircuit, Check, ChevronDown, Mic, Pencil, Search, Square, Trash2 } from "lucide-react";
 import { FormEvent, KeyboardEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { Message, Session, StreamingResponse } from "../types";
 import { ReasoningPanel } from "./ReasoningPanel";
@@ -23,6 +23,7 @@ interface Props {
   onSessionRename: (sessionId: string, title: string) => Promise<void>;
   onSessionDelete: (sessionId: string) => Promise<void>;
   onResolveApproval: (approvalId: string, decision: "approve" | "deny", scope?: "once" | "task", chooseDirectory?: boolean) => void;
+  onOpenMemoryTrace: (messageId: string) => void;
 }
 
 function formatTime(value: string) {
@@ -48,9 +49,17 @@ function messageReasoning(message: Message) {
   }
 }
 
+function hasMemoryTrace(message: Message) {
+  try {
+    return Boolean(JSON.parse(message.metadata_json || "{}").retrievalId);
+  } catch {
+    return false;
+  }
+}
+
 export function ChatPanel({
   messages, sessions, currentSessionId, busy, switchingSession, streamingResponse,
-  onSend, onMic, onCancel, onSessionSelect, onSessionRename, onSessionDelete, onResolveApproval,
+  onSend, onMic, onCancel, onSessionSelect, onSessionRename, onSessionDelete, onResolveApproval, onOpenMemoryTrace,
 }: Props) {
   const [text, setText] = useState("");
   const [deep, setDeep] = useState(false);
@@ -306,6 +315,11 @@ export function ChatPanel({
                 <span>{message.role === "user" ? "你" : "Pet"}</span>
                 <time>{formatTime(message.created_at)}</time>
                 {message.modality === "voice" && <Mic size={13} />}
+                {message.role === "assistant" && hasMemoryTrace(message) && (
+                  <button className="message-memory-button" title="查看本次回复的记忆上下文" onClick={() => onOpenMemoryTrace(message.id)}>
+                    <BrainCircuit size={13} />
+                  </button>
+                )}
               </div>
               {reasoning?.content && <ReasoningPanel content={reasoning.content} durationMs={reasoning.durationMs} />}
               {message.role === "assistant"

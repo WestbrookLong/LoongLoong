@@ -27,7 +27,7 @@ export function Navigation({ route, onRoute, onNewChat }: Props) {
         {routes.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
-            className={`nav-item ${route === id ? "active" : ""}`}
+            className={`nav-item ${route === id || (id === "memory" && route === "memory-data") ? "active" : ""}`}
             title={label}
             aria-label={label}
             onClick={() => onRoute(id)}
@@ -47,4 +47,3 @@ export function Navigation({ route, onRoute, onNewChat }: Props) {
     </nav>
   );
 }
-

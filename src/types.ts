@@ -1,4 +1,4 @@
-export type Route = "chat" | "history" | "memory" | "logs" | "settings";
+export type Route = "chat" | "history" | "memory" | "memory-data" | "logs" | "settings";
 export type ThemeMode = "light" | "dark" | "system";
 
 export interface Message {
@@ -90,7 +90,114 @@ export interface Dashboard {
   embeddings: number;
   embeddingJobs: number;
   claimNeighborCandidates: number;
+  memoryGovernanceActions: number;
   databasePath: string;
+}
+
+export type MemoryNodeType = "identity" | "claim" | "slot" | "topic" | "topic_item" | "open_loop" | "event" | "state" | "retrieval" | "governance";
+
+export interface MemoryVisualNode {
+  id: string;
+  rawId: string;
+  type: MemoryNodeType;
+  label: string;
+  summary?: string;
+  status?: string;
+  temporalState?: string;
+  epistemicBasis?: string;
+  confidence?: number;
+  start?: string | null;
+  end?: string | null;
+  date?: string | null;
+  hidden?: boolean;
+  synthetic?: boolean;
+  meta?: Record<string, unknown>;
+}
+
+export interface MemoryVisualEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  label?: string;
+  confidence?: number;
+  date?: string;
+  inferred?: boolean;
+  directed?: boolean;
+}
+
+export interface MemoryGraph {
+  generatedAt: string;
+  mode: "local" | "global" | "developer";
+  focusId: string;
+  asOf?: string | null;
+  nodes: MemoryVisualNode[];
+  edges: MemoryVisualEdge[];
+  truncated: boolean;
+  totals: { nodes: number; edges: number };
+}
+
+export interface MemoryOverview {
+  generatedAt: string;
+  asOf?: string | null;
+  stats: {
+    currentClaims: number;
+    disputedClaims: number;
+    candidateClaims: number;
+    activeTopics: number;
+    openLoops: number;
+    hidden: number;
+    pendingNeighbors: number;
+  };
+  groupedClaims: Record<string, Array<Record<string, unknown>>>;
+  topics: Array<Record<string, unknown>>;
+  openLoops: Array<Record<string, unknown>>;
+  days: Array<Record<string, unknown>>;
+  states: Array<Record<string, unknown>>;
+  recentChanges: Array<Record<string, unknown>>;
+  reviewQueue: Array<Record<string, unknown>>;
+}
+
+export interface MemoryTimelineEntry {
+  id: string;
+  rawId: string;
+  track: "events" | "topics" | "claims" | "open_loops" | "changes";
+  type: MemoryNodeType;
+  label: string;
+  status?: string;
+  temporalState?: string;
+  epistemicBasis?: string;
+  start: string;
+  end?: string | null;
+  meta?: Record<string, unknown>;
+}
+
+export interface MemoryTimeline {
+  generatedAt: string;
+  from: string | null;
+  to: string | null;
+  entries: MemoryTimelineEntry[];
+}
+
+export interface MemoryTrace {
+  type: "retrieval";
+  id: string;
+  retrieval: Record<string, unknown> & {
+    query: string;
+    mode: string;
+    score_version: string;
+    created_at: string;
+    route: Record<string, unknown>;
+  };
+  userMessage?: Message | null;
+  assistantMessage?: Message | null;
+  claims: Array<Record<string, unknown>>;
+  events: Array<Record<string, unknown>>;
+  topics: Array<Record<string, unknown>>;
+  topicItems: Array<Record<string, unknown>>;
+  openLoops: Array<Record<string, unknown>>;
+  stages: Array<Record<string, unknown>>;
+  caveat: string;
 }
 
 export interface Bootstrap {
@@ -208,6 +315,13 @@ export interface PetApi {
   scanTopics(): Promise<{ candidateIds: string[]; adjudications: Record<string, unknown>[] }>;
   reindexEmbeddings(): Promise<{ queued: number; processed: number; failed: number }>;
   scanClaimNeighbors(): Promise<{ candidateIds: string[]; adjudications: Record<string, unknown>[] }>;
+  getMemoryOverview(payload?: { asOf?: string | null }): Promise<MemoryOverview>;
+  getMemoryGraph(payload?: { focusId?: string; depth?: number; mode?: "local" | "global" | "developer"; includeSimilarity?: boolean; includeRetrieval?: boolean; asOf?: string | null; limit?: number }): Promise<MemoryGraph>;
+  getMemoryTimeline(payload?: { from?: string | null; to?: string | null; limit?: number }): Promise<MemoryTimeline>;
+  getMemoryNodeDetail(nodeId: string): Promise<Record<string, unknown> | null>;
+  getMemoryTrace(payload: { messageId?: string; retrievalId?: string }): Promise<MemoryTrace | null>;
+  getMemoryDiagnostics(): Promise<Record<string, unknown>>;
+  governMemory(payload: { action: "confirm" | "correct" | "hide" | "unhide" | "delete"; objectType: string; objectId: string; correctedText?: string; reason?: string }): Promise<Record<string, unknown>>;
   evaluateContinuity(): Promise<{ runId: string; recommendation: { action: string; safe: boolean } }>;
   continuityProfileAction(payload: { action: "stage" | "promote"; profileId: string }): Promise<{ applied: boolean; reason?: string }>;
   openExternal(url: string): Promise<void>;

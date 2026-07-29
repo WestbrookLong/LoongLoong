@@ -1,13 +1,16 @@
 import { AlertCircle, CheckCircle2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { ChatPanel } from "./components/ChatPanel";
 import { DataInspector } from "./components/DataInspector";
+import { MemoryTraceDrawer } from "./components/MemoryTraceDrawer";
 import { Navigation } from "./components/Navigation";
 import { PetStage } from "./components/PetStage";
 import { SettingsView } from "./components/SettingsView";
 import { useVoiceConversation } from "./hooks/useVoiceConversation";
 import { watchThemeMode } from "./theme";
 import type { Bootstrap, Dashboard, Message, Route, Session, Settings, StreamingResponse } from "./types";
+
+const MemoryAtlas = lazy(() => import("./components/MemoryAtlas").then((module) => ({ default: module.MemoryAtlas })));
 
 interface Toast {
   id: number;
@@ -26,6 +29,8 @@ export default function App() {
   const [streamingResponse, setStreamingResponse] = useState<StreamingResponse | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [switchingSession, setSwitchingSession] = useState(false);
+  const [traceMessageId, setTraceMessageId] = useState<string | null>(null);
+  const [memoryFocusId, setMemoryFocusId] = useState<string | null>(null);
 
   const notify = useCallback((message: string, error = false) => {
     const next = { id: Date.now(), message, error };
@@ -227,6 +232,7 @@ export default function App() {
             onSessionRename={renameChat}
             onSessionDelete={deleteChat}
             onResolveApproval={(approvalId, decision, scope, chooseDirectory) => void resolveApproval(approvalId, decision, scope, chooseDirectory)}
+            onOpenMemoryTrace={setTraceMessageId}
           />
           <div className="dev-stats" aria-label="开发状态">
             <span><b>{dashboard.events}</b> 事件</span>
@@ -240,6 +246,16 @@ export default function App() {
         <DataInspector kind="history" dashboard={dashboard} onDashboard={setDashboard} notify={notify} />
       )}
       {route === "memory" && (
+        <Suspense fallback={<div className="app-loading"><span /><span /><span /></div>}>
+          <MemoryAtlas
+            initialNodeId={memoryFocusId}
+            onOpenData={() => setRoute("memory-data")}
+            notify={notify}
+            onDashboardRefresh={async () => setDashboard(await window.pet.getDashboard())}
+          />
+        </Suspense>
+      )}
+      {route === "memory-data" && (
         <DataInspector kind="memory" dashboard={dashboard} onDashboard={setDashboard} notify={notify} />
       )}
       {route === "logs" && (
@@ -255,6 +271,15 @@ export default function App() {
           {toast.message}
         </div>
       )}
+      <MemoryTraceDrawer
+        messageId={traceMessageId}
+        onClose={() => setTraceMessageId(null)}
+        onOpenNode={(nodeId) => {
+          setTraceMessageId(null);
+          setMemoryFocusId(nodeId);
+          setRoute("memory");
+        }}
+      />
     </div>
   );
 }

@@ -735,7 +735,7 @@ npm run eval:retrieval:hybrid
 - 新状态迁移放入事务；
 - 新检索规则先增加离线用例，再进入在线路径；
 - 不用 Reranker 修补 Eligibility 错误；
-- 不物理删除历史 Claim 或 merged Topic；
+- 默认不物理删除历史 Claim 或 merged Topic；只有用户在记忆图景中明确执行“删除派生记忆”时，才删除目标 Claim 及其派生索引和关系，原始聊天与 Event 证据仍保留；
 - Prompt 中始终携带认识论与时间语义；
 - 所有远程语义调用必须遵守 consent 和敏感信息过滤；
 - 失败路径保留基础聊天能力和完整审计。
@@ -758,3 +758,83 @@ npm run eval:retrieval:hybrid
 ```
 
 它不再是“未来计划中的混合检索”，也不是单纯的按日摘要系统。当前版本的核心特征是：LLM 负责理解和压缩，确定性代码负责事实治理，检索层负责在正确性边界内把恰当的记忆交给回复模型。
+
+## 21. 记忆图景与用户治理（P0-P5）
+
+当前版本已经实现完整的记忆可视化闭环。它不是第二套记忆数据库，而是对现有
+Claim、Event、Topic、Topic Item、Open Loop、State 和 Retrieval Log 的稳定只读投影。
+所有节点 ID 使用 `type:id` 形式，关系图中的边直接来自证据表、关系表、状态修订和检索日志。
+
+### 21.1 P0：投影模型与 IPC
+
+`electron/memory-visualization.cjs` 提供以下投影：
+
+- `getMemoryOverview()`：当前记忆统计、分类 Claim、Topic、Open Loop、每日活动和复核队列；
+- `getMemoryGraph()`：局部或全局节点/边投影，可选语义邻居和回复检索路径；
+- `getMemoryTimeline()`：Event、Topic、Claim 有效期、Open Loop 和治理操作的多轨时间线；
+- `getMemoryNodeDetail()`：对象、证据、来源消息、关系、版本、变化线和召回记录；
+- `getMemoryRetrievalTrace()`：某条回复实际收到的记忆集合与检索 Stage；
+- `getMemoryDiagnostics()`：Embedding、Hybrid Retrieval、Reranker、邻居候选和治理健康状态。
+
+Electron 主进程通过 `memory:atlas-*` IPC 暴露这些能力，preload 只提供结构化方法，不向
+Renderer 暴露数据库或 Node 权限。
+
+### 21.2 P1：概览、局部图和证据详情
+
+记忆入口默认打开“概览”，按事实、偏好、目标、约束和习惯展示当前 Claim，并同时展示：
+
+- 当前 Claim、活跃 Topic、Open Loop 和待复核数量；
+- Topic 当前立场与未完成事项；
+- 最近 84 天 Event 密度；
+- Claim 的 `status`、`epistemic_basis`、`confidence` 和时间状态。
+
+“关系图”使用 Cytoscape 渲染。默认局部模式执行受控 BFS，并对身份中心这类高连接节点设置
+邻居上限，避免把整个数据库一次铺开。节点点击后打开详情栏，证据可以追溯到 Event 和原始
+Message。全局模式只展示 Identity、Claim、Topic、Open Loop 和 State 等核心对象。
+
+### 21.3 P2：时间线与历史时点
+
+时间线以五条轨道展示事件、主题、事实变化、未完成事项和用户治理。Claim 使用
+`valid_from` / `valid_to`，Open Loop 使用 `created_at` / `resolved_at`。
+
+顶部“历史时点”会重新投影指定时间的 Claim、Topic Revision 和 Open Loop 状态：
+
+- 尚未创建的对象不出现；
+- 当时尚未解决的 Open Loop 恢复为 open；
+- 纠正前的 superseded Claim 可在其历史有效时点重新出现；
+- 当前数据库不具备精确历史字段的 Topic 状态只恢复最近 Revision 内容，不伪造状态变化。
+
+### 21.4 P3：回复级记忆溯源
+
+`retrieval_logs` 增加 `user_message_id` 和 `assistant_message_id`。每次回复保存 Retrieval ID，
+聊天气泡上的记忆按钮可以打开溯源抽屉，展示：
+
+- 查询、路由、评分版本和时间；
+- 被提供给模型的 Claim、Event、Topic、Topic Item 和 Open Loop；
+- 每个 Retrieval Stage 的状态、耗时、输入输出数量和 payload。
+
+界面明确声明：日志能证明“哪些记忆被提供给模型”，不能证明模型最终依赖了每一条记忆。
+
+### 21.5 P4：确认、纠正、隐藏和删除
+
+用户操作写入 `memory_governance_actions`，保存 before/after JSON、原因、来源 Event 和时间。
+
+- **确认**：复用原 Claim value，补充用户证据，不创建重复 Claim；
+- **纠正**：创建 `memory_governance` Event，再通过 `applyClaimProposal()` 和既有确定性 reducer
+  执行 correction/supersede；
+- **隐藏**：写入 `memory_object_policies(do_not_surface, do_not_embed)`，删除现有 Embedding 和 Job，
+  从普通检索与概览中退出；
+- **恢复**：将 surface/embedding policy 恢复为普通继承；
+- **删除**：只允许显式删除 Claim 派生对象，清理 Evidence 关联、Claim Relation、Transition、
+  Neighbor、Embedding 和 Job；原始 Message 与 Event 不删除。
+
+LLM 不参与这些最终状态变更，用户操作由事务和 reducer 保证原子性及审计性。
+
+### 21.6 P5：全局图与开发诊断
+
+开发视图展示 Embedding Ready/Failed、待处理 Job、Retrieval 数量、降级 Stage、隐藏对象、
+Topic 健康警告和 Claim Neighbor 候选。语义相似边默认关闭，并标记为推断关系；它不会被表现
+成用户明确陈述，也不会直接改变 Claim 状态。
+
+原始数据表仍保留为独立“数据表”入口，用于逐行核对投影与底层记录。新增测试
+`tests/memory-visualization.test.cjs` 覆盖投影、回复溯源以及确认、纠正、隐藏、恢复和删除闭环。

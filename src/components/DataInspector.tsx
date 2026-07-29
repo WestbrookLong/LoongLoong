@@ -35,6 +35,7 @@ const tabs: Record<InspectorKind, Array<{ id: string; label: string }>> = {
     { id: "topic_aliases", label: "主题别名" },
     { id: "topic_merge_candidates", label: "合并候选" },
     { id: "claim_neighbor_candidates", label: "Claim 邻居" },
+    { id: "memory_governance_actions", label: "用户治理" },
   ],
   logs: [
     { id: "logs", label: "运行日志" },
@@ -323,6 +324,13 @@ const columns: Record<string, Array<{ key: string; label: string; width?: string
     { key: "surface_policy", label: "注入策略", width: "120px" },
     { key: "embedding_policy", label: "向量策略", width: "120px" },
     { key: "reason", label: "原因" },
+  ],
+  memory_governance_actions: [
+    { key: "action", label: "操作", width: "100px" },
+    { key: "object_type", label: "对象类型", width: "100px" },
+    { key: "object_id", label: "对象 ID" },
+    { key: "reason", label: "原因" },
+    { key: "created_at", label: "时间", width: "150px" },
   ],
   retrieval_profiles: [
     { key: "status", label: "状态", width: "90px" },
